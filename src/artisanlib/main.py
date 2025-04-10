@@ -1433,7 +1433,8 @@ class MyQDoubleValidator(QDoubleValidator): # pylint: disable=too-few-public-met
 ########################################################################################
 #################### MAIN APPLICATION WINDOW ###########################################
 ########################################################################################
-
+from plugins.rest_plugin import RoastRESTPlugin
+from plugins.config import RESTPluginConfig
 
 # NOTE: to have pylint to verify proper __slot__ definitions with pylint one has to remove the super class QMainWindow here temporarily
 #   as this class does not has __slot__ definitions and thus __dict__ is contained which suppresses the warnings
@@ -4288,6 +4289,69 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
         self.zoomOutShortcut = QShortcut(QKeySequence.StandardKey.ZoomOut, self)
         self.zoomOutShortcut.activated.connect(self.zoomOut)
 
+# Init REST plugin
+        self.rest_config = RESTPluginConfig()
+        self.rest_plugin = RoastRESTPlugin(
+            base_url=self.rest_config.base_url,
+            api_key=self.rest_config.api_key
+        )
+        
+        # Create REST plugin menu
+        self.createRESTPluginMenu()
+
+
+    def createRESTPluginMenu(self):
+        # Create Plugins menu if it doesn't exist
+        menuBar = self.menuBar()
+        self.menuPlugins = menuBar.addMenu("Plugins")
+        
+        # Add REST Plugin menu under Plugins menu
+        restMenu = QMenu("REST Plugin", self.menuPlugins)
+        
+        # Configure action
+        configAction = QAction("Configure REST API", self)
+        configAction.triggered.connect(self.configureRESTPlugin)
+        restMenu.addAction(configAction)
+        
+        # Send current roast action
+        sendAction = QAction("Send Current Roast", self)
+        sendAction.triggered.connect(self.sendCurrentRoast)
+        restMenu.addAction(sendAction)
+        
+        self.menuPlugins.addMenu(restMenu)
+
+    def configureRESTPlugin(self):
+        from plugins.config_dialog import RESTPluginConfigDialog  
+        dialog = RESTPluginConfigDialog(self.rest_config, parent=self) 
+        if dialog.exec():
+         
+            self.rest_plugin = RoastRESTPlugin(
+                base_url=self.rest_config.base_url,
+                api_key=self.rest_config.api_key
+            )
+    def getCurrentProfileData(self):
+        """Get the current roast profile data."""
+        return self.getProfile()
+
+    def sendCurrentRoast(self):
+        if not self.rest_plugin.base_url:
+            QMessageBox.warning(self, "REST Plugin", 
+                            "Please configure the REST API endpoint first.")
+            return
+            
+        # Get current roast data
+        profile_data = self.getCurrentProfileData() 
+        
+        # Send to REST API
+        success = self.rest_plugin.send_roast_data(profile_data)
+        
+        if success:
+            QMessageBox.information(self, "REST Plugin", 
+                                "Roast data sent successfully!")
+        else:
+            QMessageBox.warning(self, "REST Plugin", 
+                              "Failed to send roast data. Check the logs for details.")
+        
 
     # today is expected to be w.r.t. local timezone
     def scheduledItemsfilter(self, today:datetime.date, item:plus.schedule.ScheduledItem, hidden:bool = False) -> bool:
