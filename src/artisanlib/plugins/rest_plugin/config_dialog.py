@@ -1,8 +1,12 @@
 # /src/plugins/rest_plugin/config_dialog.py
-from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, 
-                           QLabel, QLineEdit, QPushButton)
+try:
+    from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, 
+                               QLabel, QLineEdit, QPushButton, QCheckBox)
+except ImportError:
+    from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, 
+                               QLabel, QLineEdit, QPushButton, QCheckBox)
 
-class RESTPluginConfigDialog(QDialog):
+class ConfigDialog(QDialog):
     def __init__(self, config, parent=None):
         super().__init__(parent)
         self.config = config
@@ -24,6 +28,13 @@ class RESTPluginConfigDialog(QDialog):
         self.key_edit = QLineEdit(self.config.api_key)
         key_layout.addWidget(self.key_edit)
         layout.addLayout(key_layout)
+
+        # Auto-save checkbox
+        auto_save_layout = QHBoxLayout()
+        self.auto_save_checkbox = QCheckBox("Auto-save roasts")
+        self.auto_save_checkbox.setChecked(self.config.auto_save)
+        auto_save_layout.addWidget(self.auto_save_checkbox)
+        layout.addLayout(auto_save_layout)
         
         # Buttons
         btn_layout = QHBoxLayout()
@@ -41,4 +52,5 @@ class RESTPluginConfigDialog(QDialog):
     def save(self):
         self.config.base_url = self.url_edit.text()
         self.config.api_key = self.key_edit.text()
+        self.config.auto_save = self.auto_save_checkbox.isChecked()
         self.accept()

@@ -39,3 +39,13 @@ class RESTPluginConfig:
     def api_key(self, value: str) -> None:
         self.config['api_key'] = value
         self.save_config()
+
+    @property
+    def auto_save(self) -> bool:
+        """Whether to auto-save roasts"""
+        return self.config.get('auto_save', False)
+        
+    @auto_save.setter
+    def auto_save(self, value: bool) -> None:
+        self.config['auto_save'] = value
+        self.save_config()
