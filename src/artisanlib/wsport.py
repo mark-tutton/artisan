@@ -26,7 +26,7 @@ import socket
 
 from contextlib import suppress
 from threading import Thread
-from typing import Final, Optional, Union, Any, Dict, List, TYPE_CHECKING
+from typing import Final, Optional, Union, Any, Set, Dict, List, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from artisanlib.main import ApplicationWindow # pylint: disable=unused-import
@@ -45,7 +45,7 @@ class wsport:
 
     __slots__ = [ 'aw', '_loop', '_thread', '_write_queue', 'default_host', 'host', 'port', 'path', 'machineID', 'lastReadResult', 'channels', 'readings', 'tx',
                     'channel_requests', 'channel_nodes', 'channel_modes', 'connect_timeout', 'request_timeout', 'compression',
-                    'reconnect_interval', 'ping_interval', 'ping_timeout', 'id_node', 'machine_node',
+                    'reconnect_interval', '_ping_interval', '_ping_timeout', 'id_node', 'machine_node',
                     'command_node', 'data_node', 'pushMessage_node', 'request_data_command', 'charge_message', 'drop_message', 'addEvent_message', 'event_node',
                     'DRY_node', 'FCs_node', 'FCe_node', 'SCs_node', 'SCe_node', 'STARTonCHARGE', 'OFFonDROP', 'open_event', 'pending_events',
                     'ws', 'wst' ]
@@ -56,7 +56,7 @@ class wsport:
         # internals
         self._loop:        Optional[asyncio.AbstractEventLoop] = None # the asyncio loop
         self._thread:      Optional[Thread]                    = None # the thread running the asyncio loop
-        self._write_queue: Optional[asyncio.Queue[str]]    = None # the write queue
+        self._write_queue: Optional[asyncio.Queue[str]]        = None # the write queue
 
         # connects to "ws://<host>:<port>/<path>"
         self.default_host:Final[str] = '127.0.0.1'
@@ -79,12 +79,12 @@ class wsport:
         self.channel_modes:List[int] = [0]*self.channels # temp mode is an int here, 0:__,1:C,2:F
 
         # configurable via the UI:
-        self.connect_timeout:float = 4    # in seconds
-        self.request_timeout:float = 0.5  # in seconds
-        self.reconnect_interval:float = 2 # in seconds # not used for now
+        self.connect_timeout:float = 4      # in seconds (websockets default is 10)
+        self.request_timeout:float = 0.5    # in seconds
+        self.reconnect_interval:float = 0.2 # in seconds # not used for now (reconnect delay)
         # not configurable via the UI:
-        self.ping_interval:float = 0      # in seconds; if 0 pings are not send automatically
-        self.ping_timeout:Optional[float] = None    # in seconds
+        self._ping_interval:Optional[float] = 20     # in seconds; None disables keepalive (default is 20)
+        self._ping_timeout:Optional[float] = 20      # in seconds; None disables timeouts (default is 20)
 
         # JSON nodes
         self.id_node:str = 'id'
@@ -256,6 +256,7 @@ class wsport:
             message = await self.producer()
             if message is not None:
                 await websocket.send(message)
+                await asyncio.sleep(0.1)  # yield control to the event loop
 
 
     # if serial settings are given, host/port are ignore and communication is handled by the given serial port
@@ -271,35 +272,55 @@ class wsport:
                     hostport = self.host
                 else:
                     hostport = f'{self.host}:{self.port}'
-                async with websockets.connect(
+                async for websocket in websockets.connect(
                         f'ws://{hostport}/{self.path}',
-                        compression=('deflate' if self.compression else None),
-                        origin=websockets.Origin(f'http://{socket.gethostname()}'),
-                        user_agent_header = f'Artisan/{__version__} websockets') as websocket:
-                    self.aw.sendmessageSignal.emit(QApplication.translate('Message', '{} connected').format('WebSocket'),True,None)
-                    if self._write_queue is None:
-                        self._write_queue = asyncio.Queue()
-                    consumer_task = asyncio.create_task(self.consumer_handler(websocket))
-                    producer_task = asyncio.create_task(self.producer_handler(websocket))
-                    done, pending = await asyncio.wait(
-                        [consumer_task, producer_task],
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-
-                    for task in pending:
-                        task.cancel()
-                    for task in done:
-                        exception = task.exception()
-                        if isinstance(exception, Exception):
-                            raise exception
-
+                        open_timeout = self.connect_timeout,
+                        ping_interval = self._ping_interval,
+                        ping_timeout = self._ping_timeout,
+                        compression = ('deflate' if self.compression else None),
+                        origin = websockets.Origin(f'http://{socket.gethostname()}'),
+                        user_agent_header = f'Artisan/{__version__} websockets'):
+                    done: Set[asyncio.Task[Any]] = set()
+                    pending: Set[asyncio.Task[Any]] = set()
+                    try:
+                        self.aw.sendmessageSignal.emit(QApplication.translate('Message', '{} connected').format('WebSocket'),True,None)
+                        if self._write_queue is None:
+                            self._write_queue = asyncio.Queue()
+                        consumer_task = asyncio.create_task(self.consumer_handler(websocket))
+                        producer_task = asyncio.create_task(self.producer_handler(websocket))
+                        done, pending = await asyncio.wait(
+                            [consumer_task, producer_task],
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                        _log.debug('disconnected')
+                        for task in pending:
+                            task.cancel()
+                        for task in done:
+                            exception = task.exception()
+                            if isinstance(exception, Exception):
+                                raise exception
+                    except websockets.ConnectionClosed:
+                        _log.debug('ConnectionClosed exception')
+                        continue
+                    except Exception as e: # pylint: disable=broad-except
+                        _log.exception(e)
+                    finally:
+                        for task in pending:
+                            task.cancel()
+                        for task in done:
+                            exception = task.exception()
+                            if isinstance(exception, Exception):
+                                raise exception
+                    _log.debug('reconnecting')
+                    self.aw.sendmessageSignal.emit(QApplication.translate('Message', '{} disconnected').format('WebSocket'),True,None)
+                    await asyncio.sleep(0.1)
             except asyncio.TimeoutError:
                 _log.info('connection timeout')
             except Exception as e: # pylint: disable=broad-except
                 _log.error(e)
 
             self.aw.sendmessageSignal.emit(QApplication.translate('Message', '{} disconnected').format('WebSocket'),True,None)
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.2)
 
 
     def start_background_loop(self, loop: asyncio.AbstractEventLoop) -> None:

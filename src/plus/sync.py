@@ -37,6 +37,7 @@ import os
 import time
 import logging
 import json
+import json.decoder
 from typing import Final, Optional, Dict, Any, List, IO
 
 
@@ -464,6 +465,7 @@ def applyServerUpdates(data:Dict[str, Any]) -> None:
             win:float = aw.qmc.weight[0]
             wout:float = aw.qmc.weight[1]
             wunit:str = aw.qmc.weight[2]
+            wdefects: float = aw.qmc.roasted_defects_weight
             if 'amount' in data and data['amount'] is not None:
                 assert isinstance(data['amount'], (int, float))
                 w = convertWeight(
@@ -486,6 +488,18 @@ def applyServerUpdates(data:Dict[str, Any]) -> None:
             if dirty:
                 # register new data
                 aw.qmc.weight = (win,wout,wunit)
+            if 'defects_weight' in data and data['defects_weight'] is not None:
+                w = convertWeight(
+                    data['defects_weight'],
+                    weight_units.index('Kg'),
+                    weight_units.index(wunit),
+                )
+                if w != wdefects:
+                    wdefects = w
+                    dirty = True
+            if dirty:
+                # register new data
+                aw.qmc.roasted_defects_weight = wdefects
             if 'batch_number' in data:
                 if data['batch_number'] != aw.qmc.roastbatchnr:
                     aw.qmc.roastbatchnr = data['batch_number']
@@ -564,19 +578,20 @@ def applyServerUpdates(data:Dict[str, Any]) -> None:
                     try:
                         ingredients:List[stock.BlendIngredient] = []
                         for i in data['blend']['ingredients']:
-                            entry:stock.BlendIngredient = {
-                                'ratio': i['ratio'],
-                                'coffee': i['coffee']['hr_id']}
+                            entry = stock.BlendIngredient(
+                                ratio = i['ratio'],
+                                coffee = i['coffee']['hr_id'])
                             # just the hr_id as a string and not the full object
                             if 'ratio_num' in i and i['ratio_num'] is not None:
                                 entry['ratio_num'] = i['ratio_num']
                             if 'ratio_denom' in i and i['ratio_denom'] is not None:
                                 entry['ratio_denom'] = i['ratio_denom']
                             ingredients.append(entry)
-                        blend_spec:stock.Blend = {
-                            'label': data['blend']['label'],
-                            'ingredients': ingredients,
-                        }
+                        blend_spec = stock.Blend(
+                            label = data['blend']['label'],
+                            ingredients = ingredients
+                        )
+
                         blend_spec_labels = [
                             i['coffee']['label'] for i in data['blend']['ingredients']
                         ]
@@ -735,9 +750,9 @@ def applyServerUpdates(data:Dict[str, Any]) -> None:
 # Properties Dialog and update the plus icon
 # if return_data is set, the received data is not applied via applyServerUpdates, but returned instead
 def fetchServerUpdate(uuid: str, file:Optional[str]=None, return_data:bool = False) -> Optional[Dict[str, Any]]:
-    assert config.app_window is not None
     aw = config.app_window
     import requests
+    import requests.exceptions
     try:
         _log.debug(
             ('fetchServerUpdate() -> requesting update'
@@ -745,7 +760,7 @@ def fetchServerUpdate(uuid: str, file:Optional[str]=None, return_data:bool = Fal
             file,
         )
         last_modified = ''
-        if file is not None:
+        if aw is not None and file is not None:
             #file_last_modified = util.getModificationDate(file)
             # we now use the timestamp as set on loading the file and not of the file itself as the file might have been
             # modified, eg. by another Artisan instance, since this instance loaded it
@@ -840,7 +855,7 @@ def fetchServerUpdate(uuid: str, file:Optional[str]=None, return_data:bool = Fal
                         > file_last_modified
                     ):
                         applyServerUpdates(r)
-                        if aw.qmc.plus_file_last_modified is not None:
+                        if aw is not None and aw.qmc.plus_file_last_modified is not None:
                             # we update the loaded profile timestamp to avoid receiving the same update again
                             aw.qmc.plus_file_last_modified = time.time()
                     else:
@@ -872,8 +887,9 @@ def fetchServerUpdate(uuid: str, file:Optional[str]=None, return_data:bool = Fal
     finally:
         # stop block opening the Roast Properties dialog while
         # syncing from the server
-        aw.editgraphdialog = None
-        config.app_window.updatePlusStatusSignal.emit()  # @UndefinedVariable
+        if aw is not None:
+            aw.editgraphdialog = None
+            aw.updatePlusStatusSignal.emit()  # @UndefinedVariable
     return None
 
 
@@ -890,7 +906,7 @@ def getUpdate(uuid: Optional[str], file:Optional[str]=None) -> None:
     _log.debug('getUpdate(%s,%s)', uuid, file)
     if uuid is not None and config.app_window is not None:
         aw = config.app_window
-        if aw.editgraphdialog is None and controller.is_connected():
+        if aw is not None and aw.editgraphdialog is None and controller.is_connected():
             try:
                 # block opening the Roast Properties dialog
                 # while syncing from the server

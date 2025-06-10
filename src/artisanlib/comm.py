@@ -29,7 +29,6 @@ from typing import Final, Optional, List, Tuple, Dict, Callable, Union, Any, TYP
 
 if TYPE_CHECKING:
     from artisanlib.main import ApplicationWindow # pylint: disable=unused-import
-    from artisanlib.aillio import AillioR1 # pylint: disable=unused-import
     from artisanlib.colortrack import ColorTrack, ColorTrackBLE # pylint: disable=unused-import
     import serial # noqa: F401 # pylint: disable=unused-import
     from Phidget22.Phidget import Phidget # type: ignore # pylint: disable=unused-import
@@ -45,6 +44,8 @@ if TYPE_CHECKING:
     from yoctopuce.yocto_current import YCurrent # type: ignore # pylint: disable=unused-import
     from yoctopuce.yocto_temperature import YTemperature # type: ignore # pylint: disable=unused-import
     from yoctopuce.yocto_api import YMeasure # pylint: disable=unused-import
+    from artisanlib.aillio_r1 import AillioR1 # pylint: disable=unused-import
+    from artisanlib.aillio_r2 import AillioR2 # pylint: disable=unused-import
 
 
 
@@ -364,7 +365,7 @@ class serialport:
         self.ArduinoIsInitialized = 0
         self.ArduinoFILT = [70,70,70,70] # Arduino Filter settings per channel in %
         self.HH806Winitflag = 0
-        self.R1:Optional[AillioR1] = None
+        self.R1:Optional[Union[AillioR1,AillioR2]] = None
         #list of functions calls to read temperature for devices.
         # device 0 (with index 0 below) is Fuji Pid
         # device 1 (with index 1 below) is Omega HH806
@@ -548,7 +549,8 @@ class serialport:
                                    self.Santoker_IB,          #172
                                    self.Santoker_RR,          #173
                                    self.ColorTrackBT,         #174
-                                   self.BlueDOT_BTET          #175
+                                   self.BlueDOT_BTET,         #175
+                                   self.R2_BTIBTS             #176
                                    ]
         #string with the name of the program for device #27
         self.externalprogram:str = 'test.py'
@@ -1235,41 +1237,87 @@ class serialport:
 
     def R1_DTBT(self) -> Tuple[float,float,float]:
         if self.R1 is None:
-            from artisanlib.aillio import AillioR1
+            from artisanlib.aillio_r1 import AillioR1
             self.R1 = AillioR1()
         tx = self.aw.qmc.timeclock.elapsedMilli()
-        try:
-            #removed batchcounter to address issue #667
-            #if self.aw.qmc.batchcounter != -1:
-            #    self.aw.qmc.batchcounter = self.R1.get_roast_number()
-            self.aw.qmc.R1_BT = self.R1.get_bt()
-            self.aw.qmc.R1_DT = self.R1.get_dt()
-            self.aw.qmc.R1_DRUM = self.R1.get_drum() * 10
-            self.aw.qmc.R1_VOLTAGE = self.R1.get_voltage()
-            self.aw.qmc.R1_HEATER = self.R1.get_heater() * 10
-            self.aw.qmc.R1_FAN = self.R1.get_fan() * 10
-            self.aw.qmc.R1_BT_ROR = self.R1.get_bt_ror()
-            self.aw.qmc.R1_EXIT_TEMP = self.R1.get_exit_temperature()
-            self.aw.qmc.R1_STATE = self.R1.get_state()
-            self.aw.qmc.R1_FAN_RPM = self.R1.get_fan_rpm()
-            self.aw.qmc.R1_TX = tx
-            newstate = self.R1.get_state_string()
-            if newstate != self.aw.qmc.R1_STATE_STR:
-                self.aw.qmc.R1_STATE_STR = newstate
-                self.aw.sendmessage(QApplication.translate('Message', 'R1 state: ' + newstate))
-            if self.aw.qmc.mode == 'F':
-                self.aw.qmc.R1_DT = fromCtoFstrict(self.aw.qmc.R1_DT)
-                self.aw.qmc.R1_BT = fromCtoFstrict(self.aw.qmc.R1_BT)
-                self.aw.qmc.R1_EXIT_TEMP = fromCtoFstrict(self.aw.qmc.R1_EXIT_TEMP)
-                self.aw.qmc.R1_BT_ROR = RoRfromCtoFstrict(self.aw.qmc.R1_BT_ROR)
-        except Exception as exception: # pylint: disable=broad-except
-            _log.exception(exception)
-            error = QApplication.translate('Error Message', 'Aillio R1: ' + str(exception))
-            self.aw.qmc.adderror(error)
+        if self.R1 is not None:
+            try:
+                #removed batchcounter to address issue #667
+                #if self.aw.qmc.batchcounter != -1:
+                #    self.aw.qmc.batchcounter = self.R1.get_roast_number()
+                self.aw.qmc.R1_BT = self.R1.get_bt()
+                self.aw.qmc.R1_DT = self.R1.get_dt()
+                self.aw.qmc.R1_DRUM = self.R1.get_drum() * 10
+                self.aw.qmc.R1_VOLTAGE = self.R1.get_voltage()
+                self.aw.qmc.R1_HEATER = self.R1.get_heater() * 10
+                self.aw.qmc.R1_FAN = self.R1.get_fan() * 10
+                self.aw.qmc.R1_BT_ROR = self.R1.get_bt_ror()
+                self.aw.qmc.R1_EXIT_TEMP = self.R1.get_exit_temperature()
+                self.aw.qmc.R1_STATE = self.R1.get_state()
+                self.aw.qmc.R1_FAN_RPM = self.R1.get_fan_rpm()
+                self.aw.qmc.R1_TX = tx
+                newstate = self.R1.get_state_string()
+                if newstate != self.aw.qmc.R1_STATE_STR:
+                    self.aw.qmc.R1_STATE_STR = newstate
+                    self.aw.sendmessage(QApplication.translate('Message', 'R1 state: ' + newstate))
+                if self.aw.qmc.mode == 'F':
+                    self.aw.qmc.R1_DT = fromCtoFstrict(self.aw.qmc.R1_DT)
+                    self.aw.qmc.R1_BT = fromCtoFstrict(self.aw.qmc.R1_BT)
+                    self.aw.qmc.R1_EXIT_TEMP = fromCtoFstrict(self.aw.qmc.R1_EXIT_TEMP)
+                    self.aw.qmc.R1_BT_ROR = RoRfromCtoFstrict(self.aw.qmc.R1_BT_ROR)
+            except Exception as exception: # pylint: disable=broad-except
+                _log.exception(exception)
+                error = QApplication.translate('Error Message', 'Aillio R1: ' + str(exception))
+                self.aw.qmc.adderror(error)
         return tx, self.aw.qmc.R1_DT, self.aw.qmc.R1_BT
 
     def R1_BTIBTS(self) -> Tuple[float,float,float]:
         self.R1_DTBT()
+        tx = self.aw.qmc.timeclock.elapsedMilli()
+        # DT is being used as IBTS.
+        return tx, self.aw.qmc.R1_BT, self.aw.qmc.R1_DT
+
+    def R2_BTIBTS(self) -> Tuple[float,float,float]:
+        if self.R1 is None:
+            from artisanlib.aillio_r2 import AillioR2
+            try:
+                self.R1 = AillioR2()
+            except Exception as exception: # pylint: disable=broad-except
+                _log.exception(exception)
+                error = QApplication.translate('Error Message', 'Aillio R2: ' + str(exception))
+                self.aw.qmc.adderror(error)
+        tx = self.aw.qmc.timeclock.elapsedMilli()
+        if self.R1 is not None:
+            try:
+                #removed batchcounter to address issue #667
+                #if self.aw.qmc.batchcounter != -1:
+                #    self.aw.qmc.batchcounter = self.R1.get_roast_number()
+                self.aw.qmc.R1_BT = self.R1.get_bt()
+                self.aw.qmc.R1_DT = self.R1.get_dt()
+                self.aw.qmc.R1_DRUM = self.R1.get_drum() * 10
+                self.aw.qmc.R1_VOLTAGE = self.R1.get_voltage()
+                self.aw.qmc.R1_HEATER = self.R1.get_heater() * 10
+                self.aw.qmc.R1_FAN = self.R1.get_fan() * 10
+                self.aw.qmc.R1_BT_ROR = self.R1.get_bt_ror()
+                self.aw.qmc.R1_DT_ROR = self.R1.get_dt_ror()
+                self.aw.qmc.R1_EXIT_TEMP = self.R1.get_exit_temperature()
+                self.aw.qmc.R1_STATE = self.R1.get_state()
+                self.aw.qmc.R1_FAN_RPM = self.R1.get_fan_rpm()
+                self.aw.qmc.R1_TX = tx
+                newstate = self.R1.get_state_string()
+                if newstate != self.aw.qmc.R1_STATE_STR:
+                    self.aw.qmc.R1_STATE_STR = newstate
+                    self.aw.sendmessage(QApplication.translate('Message', 'R2 state: ' + newstate))
+                if self.aw.qmc.mode == 'F':
+                    self.aw.qmc.R1_DT = fromCtoFstrict(self.aw.qmc.R1_DT)
+                    self.aw.qmc.R1_BT = fromCtoFstrict(self.aw.qmc.R1_BT)
+                    self.aw.qmc.R1_EXIT_TEMP = fromCtoFstrict(self.aw.qmc.R1_EXIT_TEMP)
+                    self.aw.qmc.R1_BT_ROR = RoRfromCtoFstrict(self.aw.qmc.R1_BT_ROR)
+                    self.aw.qmc.R1_DT_ROR = RoRfromCtoFstrict(self.aw.qmc.R1_DT_ROR)
+            except Exception as exception: # pylint: disable=broad-except
+                _log.exception(exception)
+                error = QApplication.translate('Error Message', 'Aillio R2: ' + str(exception))
+                self.aw.qmc.adderror(error)
         tx = self.aw.qmc.timeclock.elapsedMilli()
         # DT is being used as IBTS.
         return tx, self.aw.qmc.R1_BT, self.aw.qmc.R1_DT
@@ -1441,13 +1489,13 @@ class serialport:
             try:
                 from artisanlib.colortrack import ColorTrack
                 from artisanlib.atypes import SerialSettings
-                colortrack_serial:SerialSettings = {
-                    'port': self.comport,
-                    'baudrate': self.baudrate,
-                    'bytesize': self.bytesize,
-                    'stopbits': self.stopbits,
-                    'parity': self.parity,
-                    'timeout': self.timeout}
+                colortrack_serial = SerialSettings(
+                    port = self.comport,
+                    baudrate = self.baudrate,
+                    bytesize = self.bytesize,
+                    stopbits = self.stopbits,
+                    parity = self.parity,
+                    timeout = self.timeout)
                 self.colorTrackSerial = ColorTrack(serial=colortrack_serial)
                 self.colorTrackSerial.setLogging(self.aw.qmc.device_logging)
                 self.colorTrackSerial.start()
@@ -1775,35 +1823,36 @@ class serialport:
         tx = self.aw.qmc.timeclock.elapsedMilli()
         t1:float = -1
         t2:float = -1
-        sid:int = 0
+#        _sid:int = 0
         if self.aw.kaleido is not None:
-            t1, t2, sid = self.aw.kaleido.getBTET()
-            try:
-                event_flag:int = sid & 15 # last 4 bits of the sid
-                if event_flag == 1 and self.aw.qmc.timeindex[0] == -1:
-                    self.aw.qmc.markChargeSignal.emit(True) # CHARGE
-                elif event_flag == 2 and self.aw.qmc.TPalarmtimeindex is None:
-                    self.aw.qmc.markTPSignal.emit() # TP
-                elif event_flag == 3 and self.aw.qmc.timeindex[1] == 0:
-                    self.aw.qmc.markDRYSignal.emit(True) # DRY
-                elif event_flag == 4 and self.aw.qmc.timeindex[2] == 0:
-                    self.aw.qmc.markFCsSignal.emit(True) # FCs
-                elif event_flag == 5 and self.aw.qmc.timeindex[3] == 0:
-                    self.aw.qmc.markFCeSignal.emit(True) # FCe
-                elif event_flag == 6 and self.aw.qmc.timeindex[4] == 0:
-                    self.aw.qmc.markSCsSignal.emit(True) # SCs
-                elif event_flag == 7 and self.aw.qmc.timeindex[5] == 0:
-                    self.aw.qmc.markSCeSignal.emit(True) # SCe
-                elif (event_flag == 8 and self.aw.qmc.timeindex[6] == 0 and
-                    self.aw.qmc.timeindex[0] > -1 and self.aw.qmc.autoDropIdx == 0 and
-                    (self.aw.qmc.timex[-1] - self.aw.qmc.timex[self.aw.qmc.timeindex[0]]) > 7*60):
-                    # only after 7min into the roast and if CHARGE is marked
-                    self.aw.qmc.autoDropIdx = len(self.aw.qmc.timex) - 2
-                    self.aw.qmc.markDropSignal.emit(True) # DROP
-                elif event_flag == 9 and self.aw.qmc.timeindex[7] == 0:
-                    self.aw.qmc.markCoolSignal.emit(True) # COOL
-            except Exception as e: # pylint: disable=broad-except
-                _log.error(e)
+            t1, t2, _sid = self.aw.kaleido.getBTET()
+# it remains unclear what those machine exactly report and when. In some cases processingn this event flag can lead to unfavorable situations so we do not process them at all
+#            try:
+#                event_flag:int = _sid & 15 # last 4 bits of the sid
+#                if event_flag == 1 and self.aw.qmc.timeindex[0] == -1:
+#                    self.aw.qmc.markChargeSignal.emit(True) # CHARGE
+#                elif event_flag == 2 and self.aw.qmc.TPalarmtimeindex is None:
+#                    self.aw.qmc.markTPSignal.emit() # TP
+#                elif event_flag == 3 and self.aw.qmc.timeindex[1] == 0:
+#                    self.aw.qmc.markDRYSignal.emit(True) # DRY
+#                elif event_flag == 4 and self.aw.qmc.timeindex[2] == 0:
+#                    self.aw.qmc.markFCsSignal.emit(True) # FCs
+#                elif event_flag == 5 and self.aw.qmc.timeindex[3] == 0:
+#                    self.aw.qmc.markFCeSignal.emit(True) # FCe
+#                elif event_flag == 6 and self.aw.qmc.timeindex[4] == 0:
+#                    self.aw.qmc.markSCsSignal.emit(True) # SCs
+#                elif event_flag == 7 and self.aw.qmc.timeindex[5] == 0:
+#                    self.aw.qmc.markSCeSignal.emit(True) # SCe
+#                elif (event_flag == 8 and self.aw.qmc.timeindex[6] == 0 and
+#                    self.aw.qmc.timeindex[0] > -1 and self.aw.qmc.autoDropIdx == 0 and
+#                    (self.aw.qmc.timex[-1] - self.aw.qmc.timex[self.aw.qmc.timeindex[0]]) > 7*60):
+#                    # only after 7min into the roast and if CHARGE is marked
+#                    self.aw.qmc.autoDropIdx = len(self.aw.qmc.timex) - 2
+#                    self.aw.qmc.markDropSignal.emit(True) # DROP
+#                elif event_flag == 9 and self.aw.qmc.timeindex[7] == 0:
+#                    self.aw.qmc.markCoolSignal.emit(True) # COOL
+#            except Exception as e: # pylint: disable=broad-except
+#                _log.error(e)
         return tx,t2,t1 # time, ET (chan2), BT (chan1)
 
     def Kaleido_SVAT(self) -> Tuple[float,float,float]:
@@ -2489,7 +2538,7 @@ class serialport:
                         temps[i] = t
                         if self.aw.seriallogflag:
                             settings = str(self.comport) + ',' + str(self.baudrate) + ',' + str(self.bytesize)+ ',' + str(self.parity) + ',' + str(self.stopbits) + ',' + str(self.timeout)
-                            self.aw.addserial('Behmor: ' + settings + ' || Tx = ' + str(command) + ' || Rx = ' + str(res) + ' || Ts= %.2f'%t) # pylint: disable=consider-using-f-string # noqa: UP031
+                            self.aw.addserial(f'Behmor: {settings} || Tx = {command} || Rx = {res!r} || Ts= {t:.2f}')
                     except Exception: # pylint: disable=broad-except
                         pass
             return temps[0],temps[1]
@@ -5951,7 +6000,7 @@ class serialport:
                     mode:int,
                     connected_yoctos:List[str],
                     YOCTOsensor:Union['YGenericSensor','YPower','YVoltage','YCurrent','YSensor','YTemperature'],  # type:ignore[no-any-unimported,unused-ignore]
-                    productNameFilter:Optional[str] = None) -> Union['YGenericSensor','YPower','YVoltage','YCurrent','YSensor','YTemperature']: # type:ignore[no-any-unimported,unused-ignore]
+                    productNameFilter:Optional[str] = None) -> Union['YGenericSensor','YPower','YVoltage','YCurrent','YSensor','YTemperature', None]: # type:ignore[no-any-unimported,unused-ignore]
         if YOCTOsensor:
             productName = YOCTOsensor.get_module().get_productName()
             if (YOCTOsensor.get_hardwareId() not in connected_yoctos) and  \

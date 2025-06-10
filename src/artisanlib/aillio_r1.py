@@ -27,7 +27,7 @@ import usb.util # type: ignore[import-untyped]
 import array
 
 if system().startswith('Windows'):
-    import libusb_package # pyright:ignore[reportMissingImports] # pylint: disable=import-error
+    import libusb_package # pyright:ignore[reportMissingImports] # pylint: disable=import-error # ty:ignore[unresolved-import]
 
 #import requests
 #from requests_file import FileAdapter # type: ignore # @UnresolvedImport
@@ -120,16 +120,17 @@ class AillioR1:
 
     def __del__(self) -> None:
         if not self.simulated:
-            self.__close()
+            self._close_port()
 
     def __dbg(self, msg:str) -> None:
+        _log.debug('Aillio: %s', msg)
         if self.AILLIO_DEBUG and not self.simulated:
             try:
                 print('AillioR1: ' + msg)
             except OSError:
                 pass
 
-    def __open(self) -> None:
+    def _open_port(self) -> None:
         if self.simulated:
             return
         if self.usbhandle is not None:
@@ -151,7 +152,7 @@ class AillioR1:
                         '/usr/lib/aarch64-linux-gnu/libusb-1.0.so.0']:
                     if os.path.isfile(shared_libusb_path):
                         import usb.backend.libusb1 as libusb10 # type: ignore[import-untyped, unused-ignore]
-                        libusb10._load_library = _load_library # pylint: disable=protected-access # overwrite the overwrite of the pyinstaller runtime hook pyi_rth_usb.py
+                        libusb10._load_library = _load_library # pylint: disable=protected-access # ty: ignore[invalid-assignment] # overwrite the overwrite of the pyinstaller runtime hook pyi_rth_usb.py
                         from usb.backend.libusb1 import get_backend  # type: ignore[import-untyped, unused-ignore]
                         backend = get_backend(find_library=lambda _,shared_libusb_path=shared_libusb_path: shared_libusb_path)
                         break
@@ -179,7 +180,7 @@ class AillioR1:
 #                raise OSError('unable to detach kernel driver') from e
         try:
             config = self.usbhandle.get_active_configuration()
-            if config.bConfigurationValue != self.AILLIO_CONFIGURATION:
+            if config is not None and config.bConfigurationValue != self.AILLIO_CONFIGURATION:
                 self.usbhandle.set_configuration(configuration=self.AILLIO_CONFIGURATION)
         except Exception as e:  # pylint: disable=broad-except
             self.usbhandle = None
@@ -206,7 +207,7 @@ class AillioR1:
         if self.worker_thread is not None:
             self.worker_thread.start()
 
-    def __close(self) -> None:
+    def _close_port(self) -> None:
         if self.simulated:
             return
         if self.usbhandle is not None:
@@ -265,6 +266,10 @@ class AillioR1:
     def get_bt_ror(self) -> float:
         self.__getstate()
         return self.bt_ror
+
+    @staticmethod
+    def get_dt_ror() -> float:
+        return 0 # not available on the R1
 
     def get_exit_temperature(self) -> float:
         self.__getstate()
@@ -336,6 +341,11 @@ class AillioR1:
         if self.parent_pipe is not None:
             self.parent_pipe.send(self.AILLIO_CMD_PRS)
 
+    def send_command(self, str_in:str) -> None:
+        cmd = str_in.strip().lower()
+        if cmd == 'prs':
+            self.prs()
+
     def __updatestate(self, p:'Connection') -> None: # type:ignore[no-any-unimported,unused-ignore]
         while self.worker_thread_run:
             state1:array.array[int] = array.array('B', bytes(0)) # pylint: disable=unsubscriptable-object
@@ -377,7 +387,7 @@ class AillioR1:
             self.r1state = self.AILLIO_STATE_ROASTING
             self.state_str = 'roasting'
             return
-        self.__open()
+        self._open_port()
         if self.parent_pipe is None or not self.parent_pipe.poll():
             return
         state = self.parent_pipe.recv()

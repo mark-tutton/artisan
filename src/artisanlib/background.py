@@ -122,11 +122,23 @@ class backgroundDlg(ArtisanResizeablDialog):
 
         curvenames = [''] # first entry is the empty one, no extra curve displayed
         for i in range(min(len(self.aw.qmc.extraname1B),len(self.aw.qmc.extraname2B),len(self.aw.qmc.extratimexB))):
-            curvenames.append('B' + str(2*i+3) + ': ' + self.aw.qmc.extraname1B[i].format(
-                self.aw.qmc.Betypesf(0),self.aw.qmc.Betypesf(1),self.aw.qmc.Betypesf(2),self.aw.qmc.Betypesf(3),self.aw.qmc.mode))
-            curvenames.append('B' + str(2*i+4) + ': ' + self.aw.qmc.extraname2B[i].format(
-                self.aw.qmc.Betypesf(0),self.aw.qmc.Betypesf(1),self.aw.qmc.Betypesf(2),self.aw.qmc.Betypesf(3),self.aw.qmc.mode))
+            cn1 = self.aw.qmc.extraname1B[i]
+            try:
+                cn1 = cn1.format(
+                    self.aw.qmc.Betypesf(0),self.aw.qmc.Betypesf(1),self.aw.qmc.Betypesf(2),self.aw.qmc.Betypesf(3),self.aw.qmc.mode)
+            except Exception as e: # pylint: disable=broad-except
+                # substitution might fail if for example a variable {7} is used
+                _log.error(e)
+            curvenames.append(f'B{2*i+3}: {cn1}')
 
+            cn2 = self.aw.qmc.extraname2B[i]
+            try:
+                cn2 = cn2.format(
+                    self.aw.qmc.Betypesf(0),self.aw.qmc.Betypesf(1),self.aw.qmc.Betypesf(2),self.aw.qmc.Betypesf(3),self.aw.qmc.mode)
+            except Exception as e: # pylint: disable=broad-except
+                # substitution might fail if for example a variable {7} is used
+                _log.error(e)
+            curvenames.append(f'B{2*i+4}: {cn2}')
         self.xtcurvelabel = QLabel(QApplication.translate('Label', 'Extra 1'))
         self.xtcurveComboBox = QComboBox()
         self.xtcurveComboBox.setToolTip(QApplication.translate('Tooltip','For loaded backgrounds with extra devices only'))
@@ -192,10 +204,24 @@ class backgroundDlg(ArtisanResizeablDialog):
             QApplication.translate('Label','by time'),
             QApplication.translate('Label','by BT').replace('BT', self.aw.BTname),
             QApplication.translate('Label','by ET').replace('ET', self.aw.ETname),
+            QApplication.translate('Label','by time/BT').replace('BT', self.aw.BTname),
+            QApplication.translate('Label','by time/ET').replace('ET', self.aw.ETname),
             ]
         self.replayComboBox.addItems(replayVariants)
         self.replayComboBox.setCurrentIndex(self.aw.qmc.replayType)
         self.replayComboBox.currentIndexChanged.connect(self.changeReplayTypeidx)
+        self.replayComboBox.setEnabled(self.aw.qmc.backgroundPlaybackEvents)
+
+        self.replayDropComboBox = QComboBox()
+        replayDropVariants = [
+            QApplication.translate('Label','by time'),
+            QApplication.translate('Label','by BT').replace('BT', self.aw.BTname),
+            QApplication.translate('Label','by ET').replace('ET', self.aw.ETname),
+            ]
+        self.replayDropComboBox.addItems(replayDropVariants)
+        self.replayDropComboBox.setCurrentIndex(self.aw.qmc.replayDropType)
+        self.replayDropComboBox.currentIndexChanged.connect(self.changeReplayDropTypeidx)
+        self.replayDropComboBox.setEnabled(self.aw.qmc.backgroundPlaybackDROP)
 
         self.backgroundReproduce = QCheckBox(QApplication.translate('CheckBox','Playback Aid'))
         self.backgroundReproduce.setChecked(self.aw.qmc.backgroundReproduce)
@@ -210,10 +236,12 @@ class backgroundDlg(ArtisanResizeablDialog):
         self.backgroundPlaybackEvents.setChecked(self.aw.qmc.backgroundPlaybackEvents)
         self.backgroundPlaybackEvents.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.backgroundPlaybackEvents.stateChanged.connect(self.setplaybackevent)
+        self.backgroundPlaybackEvents.setToolTip(QApplication.translate('Tooltip', 'Replays the selected backgrounds events by time, BT, or ET (before TP always by time at least until 2min into the roast)'))
         self.backgroundPlaybackDROP = QCheckBox(QApplication.translate('CheckBox','Playback DROP'))
         self.backgroundPlaybackDROP.setChecked(self.aw.qmc.backgroundPlaybackDROP)
         self.backgroundPlaybackDROP.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.backgroundPlaybackDROP.stateChanged.connect(self.setplaybackdrop)
+        self.backgroundPlaybackDROP.setToolTip(QApplication.translate('Tooltip', 'Replays the backgrounds DROP event by time, BT, or ET (but earlierst 4min into the roast)'))
         self.etimelabel =QLabel(QApplication.translate('Label', 'Text Warning'))
         self.etimelabel.setEnabled(self.aw.qmc.backgroundReproduce)
         self.etimeunit =QLabel(QApplication.translate('Label', 'sec'))
@@ -246,7 +274,7 @@ class backgroundDlg(ArtisanResizeablDialog):
         movelayout.addWidget(self.speedSpinBox,1,1)
         movelayout.addWidget(self.rightButton,1,2)
         movelayout.addWidget(self.downButton,2,1)
-        movelayout.setSpacing(20)
+        movelayout.setSpacing(15)
         checkslayout1 = QHBoxLayout()
         checkslayout1.addStretch()
         checkslayout1.addWidget(self.backgroundCheck)
@@ -358,12 +386,10 @@ class backgroundDlg(ArtisanResizeablDialog):
         self.backgroundPlaybackEvent3.setEnabled(self.aw.qmc.backgroundPlaybackEvents)
 
         tab4content2 = QHBoxLayout()
-        tab4content2.addWidget(self.backgroundPlaybackDROP)
-        tab4content2.addSpacing(10)
-        tab4content2.addStretch()
         tab4content2.addWidget(self.backgroundPlaybackEvents)
         tab4content2.addSpacing(10)
         tab4content2.addWidget(self.replayComboBox)
+        tab4content2.addStretch()
         tab4content2.addSpacing(10)
         tab4content2.addWidget(self.backgroundPlaybackEvent0)
         tab4content2.addSpacing(10)
@@ -411,11 +437,19 @@ class backgroundDlg(ArtisanResizeablDialog):
         tab4content3.addSpacing(10)
         tab4content3.addWidget(self.backgroundPlaybackRampEvent3)
 
+        tab4content4 = QHBoxLayout()
+        tab4content4.addWidget(self.backgroundPlaybackDROP)
+        tab4content4.addSpacing(10)
+        tab4content4.addWidget(self.replayDropComboBox)
+        tab4content4.addStretch()
+
         tab4content = QVBoxLayout()
         tab4content.addLayout(tab4content1)
         tab4content.addLayout(tab4content2)
         tab4content.addLayout(tab4content3)
-        tab4content.setSpacing(7)
+        tab4content.addLayout(tab4content4)
+        tab4content.setSpacing(5)
+        tab4content.setContentsMargins(2, 5, 2, 5) # left, top, right, bottom
 
         playbackGroupLayout = QGroupBox(QApplication.translate('GroupBox','Playback'))
         playbackGroupLayout.setLayout(tab4content)
@@ -435,6 +469,7 @@ class backgroundDlg(ArtisanResizeablDialog):
         tab1layout.addWidget(playbackGroupLayout)
         tab1layout.addLayout(optcontent)
         tab1layout.setContentsMargins(5, 0, 5, 0) # left, top, right, bottom
+        tab1layout.setSpacing(5)
         eventbuttonLayout = QHBoxLayout()
         eventbuttonLayout.addWidget(self.copyeventTableButton)
         eventbuttonLayout.addStretch()
@@ -450,7 +485,6 @@ class backgroundDlg(ArtisanResizeablDialog):
         tab3layout.addLayout(databuttonLayout)
         tab3layout.setContentsMargins(5, 0, 5, 0) # left, top, right, bottom
         #tab layout
-        tab1layout.setSpacing(5)
         self.TabWidget = QTabWidget()
         C1Widget = QWidget()
         C1Widget.setLayout(tab1layout)
@@ -471,6 +505,7 @@ class backgroundDlg(ArtisanResizeablDialog):
         mainLayout.addWidget(self.pathedit)
         mainLayout.addLayout(buttonLayout)
         mainLayout.setContentsMargins(5, 10, 5, 5) # left, top, right, bottom
+        mainLayout.setSpacing(5)
         self.setLayout(mainLayout)
         if platform.system() != 'Windows':
             ok_button: Optional[QPushButton] = self.dialogbuttons.button(QDialogButtonBox.StandardButton.Ok)
@@ -553,6 +588,7 @@ class backgroundDlg(ArtisanResizeablDialog):
         self.aw.sendmessage(msg, style=s)
         self.aw.updatePlaybackIndicator()
         for widget in [
+                self.replayComboBox,
                 self.backgroundPlaybackEvent0,
                 self.backgroundPlaybackEvent1,
                 self.backgroundPlaybackEvent2,
@@ -612,6 +648,7 @@ class backgroundDlg(ArtisanResizeablDialog):
             self.aw.qmc.backgroundPlaybackDROP = False
             msg = QApplication.translate('StatusBar','Playback DROP set OFF')
             s = "background-color:'transparent';"
+        self.replayDropComboBox.setEnabled(self.aw.qmc.backgroundPlaybackDROP)
         self.aw.sendmessage(msg, style=s)
 
     @pyqtSlot(int)
@@ -777,6 +814,10 @@ class backgroundDlg(ArtisanResizeablDialog):
         self.aw.qmc.replayType = i
 
     @pyqtSlot(int)
+    def changeReplayDropTypeidx(self, i:int) -> None:
+        self.aw.qmc.replayDropType = i
+
+    @pyqtSlot(int)
     def changeXTcurveidx(self, i:int) -> None:
         self.aw.qmc.xtcurveidx = i
         self.aw.qmc.redraw(recomputeAllDeltas=False)
@@ -788,7 +829,7 @@ class backgroundDlg(ArtisanResizeablDialog):
 
     @pyqtSlot(bool)
     def load(self, _:bool = False) -> None:
-        self.filename = self.aw.ArtisanOpenFileDialog(msg=QApplication.translate('Message','Load Background'),ext_alt='.alog')
+        self.filename = self.aw.ArtisanOpenFileDialog(msg=QApplication.translate('Message','Load Background'),ext='*.alog')
         if len(self.filename) == 0:
             return
         self.aw.sendmessage(QApplication.translate('Message','Reading background profile...'))

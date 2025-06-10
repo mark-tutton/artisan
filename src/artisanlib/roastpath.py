@@ -55,7 +55,7 @@ class RoastPathData(TypedDict, total=False):
 
 # returns a dict containing all profile information contained in the given RoastPATH document pointed by the given QUrl
 def extractProfileRoastPathHTML(url:'QUrl', _:'ApplicationWindow') -> Optional['ProfileData']:
-    res:ProfileData = {} # the interpreted data set
+    res:ProfileData = ProfileData() # the interpreted data set
     try:
         sess = requests.Session()
         sess.mount('file://', FileAdapter())
@@ -127,7 +127,7 @@ def extractProfileRoastPathHTML(url:'QUrl', _:'ApplicationWindow') -> Optional['
         if title != '' and 'title' not in res:
             res['title'] = title
 
-        data:RoastPathData = {}
+        data:RoastPathData = RoastPathData()
         for elem in ['btData', 'etData', 'atData', 'eventData', 'rorData', 'noteData', 'fuelData', 'fanData', 'drumData']:
             page_content = ''
             try:
@@ -315,7 +315,7 @@ def extractProfileRoastPathHTML(url:'QUrl', _:'ApplicationWindow') -> Optional['
                     res['extradrawstyles1'].append('default')
                     res['extradrawstyles2'].append('default')
                     ror = data['rorData']
-                    timex = [dateutil.parser.parse(d['Timestamp']).timestamp() - baseTime if 'Tiestamp' in d else 0 for d in ror]
+                    timex = [dateutil.parser.parse(d['Timestamp']).timestamp() - baseTime if 'Timestamp' in d else 0 for d in ror]
                     res['extratimex'].append(timex)
                     res['extratemp1'].append([d.get('StandardValue', -1) for d in ror])
                     res['extratemp2'].append([-1]*len(timex))

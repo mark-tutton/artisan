@@ -20,9 +20,14 @@ import logging
 from bleak import BleakScanner, BleakClient
 from bleak.exc import BleakCharacteristicNotFoundError
 
+try:
+    from PyQt6.QtCore import QObject # @UnusedImport @Reimport  @UnresolvedImport
+except ImportError:
+    from PyQt5.QtCore import QObject # type: ignore # @UnusedImport @Reimport  @UnresolvedImport
+
 from artisanlib.async_comm import AsyncLoopThread
 
-from typing import Optional, Callable, Union, Dict, List, Set, Tuple, Awaitable, TYPE_CHECKING
+from typing import Final, Optional, Callable, Union, Dict, List, Set, Tuple, Awaitable, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from bleak.backends.device import BLEDevice # pylint: disable=unused-import
@@ -37,7 +42,7 @@ _log = logging.getLogger(__name__)
 ## prevents overlapping scan-connects that can lead to crashes
 class BLE:
 
-    _scan_and_connect_lock: asyncio.Lock = asyncio.Lock()
+    _scan_and_connect_lock:asyncio.Lock = asyncio.Lock()
     _terminate_scan_event = asyncio.Event()
     _asyncLoopThread:Optional[AsyncLoopThread] = None
 
@@ -57,10 +62,10 @@ class BLE:
     # returns True also in case the local_name is None, but the given service_uuid is within ad.service_uuids
     @staticmethod
     def name_match(bd:'BLEDevice', ad:'AdvertisementData', device_name:str, case_sensitive:bool, service_uuid:Optional[str]) -> bool:
-        return ((bd.name is not None and (bd.name.startswith(device_name) if
-                    case_sensitive else bd.name.casefold().startswith(device_name.casefold()))) or
-                (ad.local_name is not None and (ad.local_name.startswith(device_name) if
-                    case_sensitive else ad.local_name.casefold().startswith(device_name.casefold()))) or
+        return ((bd.name is not None and (bd.name.startswith(device_name) if                              # ty: ignore[possibly-unbound-attribute]
+                    case_sensitive else bd.name.casefold().startswith(device_name.casefold()))) or        # ty: ignore[possibly-unbound-attribute]
+                (ad.local_name is not None and (ad.local_name.startswith(device_name) if                  # ty: ignore[possibly-unbound-attribute]
+                    case_sensitive else ad.local_name.casefold().startswith(device_name.casefold()))) or  # ty: ignore[possibly-unbound-attribute]
                 (ad.local_name is None and service_uuid is not None and
                     service_uuid.casefold() in (uuid.casefold() for uuid in ad.service_uuids)))
 
@@ -161,8 +166,8 @@ class BLE:
             blacklist:Set[str], # list of client addresses to ignore as they don't offer the required service
             case_sensitive:bool=True,
             disconnected_callback:Optional[Callable[[BleakClient], None]] = None,
-            scan_timeout:float=3,
-            connect_timeout:float=2,
+            scan_timeout:float=6,
+            connect_timeout:float=6,
             address:Optional[str] = None # if given, connect only to the device with this ble address
             ) -> Tuple[Optional[BleakClient], Optional[str]]:
         if hasattr(self, '_asyncLoopThread') and self._asyncLoopThread is None:
@@ -185,7 +190,7 @@ class BLE:
             _log.error('exception in scan_and_connect: %s', fut.exception())
             return None, None
 
-    def disconnect(self, client:'BleakClient') -> bool:
+    def disconnect_ble(self, client:'BleakClient') -> bool:
         if hasattr(self, '_asyncLoopThread') and self._asyncLoopThread is not None:
             # don't wait for completion not to block caller (note: ble device will not be discovered until fully disconnected)
             asyncio.run_coroutine_threadsafe(client.disconnect(), self._asyncLoopThread.loop)
@@ -221,7 +226,11 @@ ble = BLE() # unique to module
 
 
 
-class ClientBLE:
+class ClientBLE(QObject): # pyright:ignore[reportGeneralTypeIssues] # error: Argument to class must be a base class
+
+    SCAN_BETWEEN_SCANS_START:Final[float] = 0.1 # initial sleep between scans in seconds
+    SCAN_BETWEEN_SCANS_INC:Final[float] = 0.1   # increase of sleep time per scan
+    SCAN_BETWEEN_SCANS_MAX:Final[float] = 3     # maximum sleep between scans in seconds
 
 # NOTE: __slots__ are incompatible with multiple inheritance mixings in subclasses (e.g. with QObject)
 #    __slots__ = [ '_running', '_async_loop_thread', '_ble_client', '_connected_service_uuid', '_disconnected_event',
@@ -230,6 +239,7 @@ class ClientBLE:
 #                    '_logging'  ]
 
     def __init__(self) -> None:
+        super().__init__()
         # internals
         self._running:bool                                   = False           # if True we keep reconnecting
         self._async_loop_thread: Optional[AsyncLoopThread]   = None            # the asyncio AsyncLoopThread object
@@ -237,13 +247,14 @@ class ClientBLE:
         self._connected_service_uuid:Optional[str]           = None            # set to the service UUID we are connected to
         self._disconnected_event:asyncio.Event               = asyncio.Event() # event set on disconnect
         self._active_notification_uuids:Set[str]             = set() # uuids of characteristics were notification are active
+        self._sleep_between_scans:float                      = self.SCAN_BETWEEN_SCANS_START
 
         # configuration
         self._device_descriptions:Dict[Optional[str],Optional[Set[str]]] = {}
         self._notifications:Dict[str, Callable[[BleakGATTCharacteristic, bytearray], None]] = {}
         self._writers:Dict[str, List[str]] = {} # associates a service UUID with a list of write characteristics
         self._readers:Dict[str, List[str]] = {} # associates a service UUID with a list of read characteristics
-        self._heartbeat_frequency : float = 0 # heartbeat frequency in seconds; heartbeat ends if not positive and >0
+        self._heartbeat_frequency : float = 0 # heartbeat frequency in seconds; heartbeat ends if not >0
         self._logging = False  # if True device communication is logged
 
 
@@ -274,7 +285,7 @@ class ClientBLE:
 
     def _disconnect(self) -> None:
         if self._ble_client is not None and self._ble_client.is_connected:
-            ble.disconnect(self._ble_client)
+            ble.disconnect_ble(self._ble_client)
 
     # returns the service UUID connected to or None
     def connected(self) -> Optional[str]:
@@ -284,7 +295,7 @@ class ClientBLE:
 
 
     # connect and re-connect while self._running to BLE
-    async def _connect(self, case_sensitive:bool=True, scan_timeout:float=3, connect_timeout:float=2, address:Optional[str] = None) -> None:
+    async def _connect(self, case_sensitive:bool=True, scan_timeout:float=6, connect_timeout:float=6, address:Optional[str] = None) -> None:
         blacklist:Set[str] = set()
         while self._running:
             # scan and connect
@@ -326,7 +337,8 @@ class ClientBLE:
                 self._disconnected_event.clear()
                 await self._disconnected_event.wait()
                 _log.debug('BLE reconnect')
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(self._sleep_between_scans)
+            self._sleep_between_scans = max(self._sleep_between_scans + self.SCAN_BETWEEN_SCANS_INC, self.SCAN_BETWEEN_SCANS_MAX)
 
     # release the async lock _disconnected_event after disconnect triggered to enable the automatic reconnect
     async def set_event(self) -> None:
@@ -394,8 +406,29 @@ class ClientBLE:
             self._keep_alive())
 
 
-    def start(self, case_sensitive:bool=True, scan_timeout:float=3, connect_timeout:float=2, address:Optional[str] = None) -> None:
+    def scan(self, scan_timeout:float = 3.0) -> 'List[Tuple[BLEDevice, AdvertisementData]]':
+        try:
+            if not hasattr(self, '_async_loop_thread') or self._async_loop_thread is None:
+                self._running = True # enable automatic reconnects
+                self._async_loop_thread = AsyncLoopThread()
+                # run scan in async loop
+                coro = BleakScanner.discover(
+                    timeout=scan_timeout,
+                    return_adv=True)
+                res = asyncio.run_coroutine_threadsafe(
+                    coro,
+                    self._async_loop_thread.loop).result()
+                _log.debug('scan_ble ended')
+                if res:
+                    return list(res.values())
+        except Exception as e:  # pylint: disable=broad-except
+            _log.exception(e)
+        return []
+
+
+    def start(self, case_sensitive:bool=True, scan_timeout:float=6, connect_timeout:float=6, address:Optional[str] = None) -> None:
         _log.debug('start')
+        self._sleep_between_scans = self.SCAN_BETWEEN_SCANS_START
         if self._running:
             _log.error('BLE client already running')
         else:
@@ -487,19 +520,3 @@ class ClientBLE:
         ...
     def heartbeat(self) -> None: # pylint: disable=no-self-use
         ...
-
-
-##
-
-# scans for named BLE devices providing any of the provided servie_uuids
-# returns a list of triples (name, address, Optional[BLEDevice])
-def scan_ble(timeout: float = 3.0) -> 'List[Tuple[BLEDevice, AdvertisementData]]':
-    coro = BleakScanner.discover(
-        timeout=timeout,
-        return_adv=True)
-    try:
-        loop = asyncio.get_running_loop()
-        res = asyncio.run_coroutine_threadsafe(coro, loop).result()
-    except RuntimeError:
-        res = asyncio.run(coro)
-    return list(res.values())
