@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Optional
+from typing import Dict, Any
 from dataclasses import dataclass, asdict
 
 @dataclass
@@ -9,21 +9,39 @@ class LiveBroadcastConfig:
     
     # Server settings
     server_host: str = "localhost"
-    server_port: int = 3000
+    server_port: int = 3001
     server_path: str = "/ws/roast"
     
     # Connection settings
-    auto_start: bool = False
     reconnect_interval: float = 5.0
-    connection_timeout: float = 10.0
+    max_reconnect_attempts: int = 10
     
-    # Data settings
+    # Broadcasting settings
+    auto_start: bool = False
     broadcast_interval: float = 1.0
-    include_full_history: bool = False
-    max_history_points: int = 100
     
-    # Authentication
-    api_key: Optional[str] = None
+    # Event broadcasting settings
+    broadcast_standard_events: bool = True
+    broadcast_custom_events: bool = True
+    broadcast_temperature_data: bool = True
+    broadcast_rate_of_rise: bool = True
+    
+    # Event filtering
+    include_events: Dict[str, bool] = None
+    
+    def __post_init__(self):
+        if self.include_events is None:
+            self.include_events = {
+                'charge': True,
+                'dry_end': True,
+                'fc_start': True,
+                'fc_end': True,
+                'sc_start': True,
+                'sc_end': True,
+                'drop': True,
+                'cool_end': True
+            }
+        self.load_config()
     
     def save_config(self) -> None:
         """Save configuration to file"""
@@ -50,7 +68,3 @@ class LiveBroadcastConfig:
                         setattr(self, key, value)
             except Exception as e:
                 print(f"Failed to load config: {e}")
-    
-    def __post_init__(self):
-        """Load config after initialization"""
-        self.load_config()
