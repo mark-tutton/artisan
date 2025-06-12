@@ -75,6 +75,36 @@ class autosaveDlg(ArtisanDialog):
         self.autopdfcheckbox.setChecked(self.aw.qmc.autosaveimage)
         self.imageTypesComboBox = QComboBox()
         self.imageTypesComboBox.addItems(self.aw.qmc.autoasaveimageformat_types)
+
+        # --- Second Save Also Option --- # Add support to handle saving more than 2 formats via autosave
+        autopdflabel2 = QLabel(QApplication.translate('CheckBox','Save also'))
+        self.autopdfcheckbox2 = QCheckBox()
+        self.autopdfcheckbox2.setToolTip(QApplication.translate('Tooltip', 'Save another image alongside .alog profiles'))
+        self.autopdfcheckbox2.setChecked(getattr(self.aw.qmc, 'autosaveimage2', False))
+        self.imageTypesComboBox2 = QComboBox()
+        self.imageTypesComboBox2.addItems(self.aw.qmc.autoasaveimageformat_types)
+        self.imageTypesComboBox2.setCurrentIndex(self.aw.qmc.autoasaveimageformat_types.index(getattr(self.aw.qmc, 'autosaveimageformat2', self.aw.qmc.autosaveimageformat)))
+        pathAlsoButton2 = QPushButton(QApplication.translate('Button','Path'))
+        pathAlsoButton2.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.pathAlsoEdit2 = QLineEdit(getattr(self.aw.qmc, 'autosavealsopath2', self.aw.qmc.autosavealsopath))
+        self.pathAlsoEdit2.setToolTip(QApplication.translate('Tooltip', 'Sets the directory to store the second save also files'))
+        pathAlsoButton2.clicked.connect(lambda: self.pathAlsoEdit2.setText(self.aw.ArtisanExistingDirectoryDialog(msg=QApplication.translate('Form Caption','AutoSave Save Also Path 2'))))
+
+        # --- Third Save Also Option --- # Add support to handle saving more than 2 formats via autosave
+        autopdflabel3 = QLabel(QApplication.translate('CheckBox','Save also'))
+        self.autopdfcheckbox3 = QCheckBox()
+        self.autopdfcheckbox3.setToolTip(QApplication.translate('Tooltip', 'Save a third image alongside .alog profiles'))
+        self.autopdfcheckbox3.setChecked(getattr(self.aw.qmc, 'autosaveimage3', False))
+        self.imageTypesComboBox3 = QComboBox()
+        self.imageTypesComboBox3.addItems(self.aw.qmc.autoasaveimageformat_types)
+        self.imageTypesComboBox3.setCurrentIndex(self.aw.qmc.autoasaveimageformat_types.index(getattr(self.aw.qmc, 'autosaveimageformat3', self.aw.qmc.autosaveimageformat)))
+        pathAlsoButton3 = QPushButton(QApplication.translate('Button','Path'))
+        pathAlsoButton3.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.pathAlsoEdit3 = QLineEdit(getattr(self.aw.qmc, 'autosavealsopath3', self.aw.qmc.autosavealsopath))
+        self.pathAlsoEdit3.setToolTip(QApplication.translate('Tooltip', 'Sets the directory to store the third save also files'))
+        pathAlsoButton3.clicked.connect(lambda: self.pathAlsoEdit3.setText(self.aw.ArtisanExistingDirectoryDialog(msg=QApplication.translate('Form Caption','AutoSave Save Also Path 3'))))
+
+
         try:
             if not self.aw.QtWebEngineSupport:
                 # disable "PDF Report" item if QtWebEngine Support is not available
@@ -135,6 +165,22 @@ class autosaveDlg(ArtisanDialog):
         autolayout.addWidget(self.imageTypesComboBox,5,2)
         autolayout.addWidget(pathAlsoButton,6,0)
         autolayout.addWidget(self.pathAlsoEdit,6,1,1,2)
+
+        # Add support to handle saving more than 2 formats via autosave
+        autolayout.addWidget(self.autopdfcheckbox2,7,0,Qt.AlignmentFlag.AlignRight)
+        autolayout.addWidget(autopdflabel2,7,1)
+        autolayout.addWidget(self.imageTypesComboBox2,7,2)
+        autolayout.addWidget(pathAlsoButton2,8,0)
+        autolayout.addWidget(self.pathAlsoEdit2,8,1,1,2)
+
+        # Add support to handle saving more than 2 formats via autosave
+        autolayout.addWidget(self.autopdfcheckbox3,9,0,Qt.AlignmentFlag.AlignRight)
+        autolayout.addWidget(autopdflabel3,9,1)
+        autolayout.addWidget(self.imageTypesComboBox3,9,2)
+        autolayout.addWidget(pathAlsoButton3,10,0)
+        autolayout.addWidget(self.pathAlsoEdit3,10,1,1,2)
+
+
         autolayout.setColumnStretch(0,0)
         autolayout.setColumnStretch(1,10)
         autolayout.setColumnStretch(2,0)
@@ -200,6 +246,18 @@ class autosaveDlg(ArtisanDialog):
         self.aw.qmc.autosaveimage = self.autopdfcheckbox.isChecked()
         self.aw.qmc.autosaveimageformat = self.imageTypesComboBox.currentText()
         self.aw.qmc.autosaveaddtorecentfilesflag = self.addtorecentfiles.isChecked()
+
+        # For the second extra format  # Add support to handle saving more than 2 formats via autosave 
+        self.aw.qmc.autosaveimage2 = self.autopdfcheckbox2.isChecked()
+        self.aw.qmc.autosaveimageformat2 = self.imageTypesComboBox2.currentText()
+        self.aw.qmc.autosavealsopath2 = self.pathAlsoEdit2.text()
+
+        # For the third extra format # Add support to handle saving more than 2 formats via autosave 
+        self.aw.qmc.autosaveimage3 = self.autopdfcheckbox3.isChecked()
+        self.aw.qmc.autosaveimageformat3 = self.imageTypesComboBox3.currentText()
+        self.aw.qmc.autosavealsopath3 = self.pathAlsoEdit3.text()
+
+
         self.close()
 
     @pyqtSlot('QCloseEvent')

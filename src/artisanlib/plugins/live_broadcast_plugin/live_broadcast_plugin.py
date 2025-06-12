@@ -776,6 +776,8 @@ class LiveBroadcastPlugin(ArtisanPlugin):
             QMessageBox.information(self.main_window, "Incoming WebSocket Message", msg)
         QTimer.singleShot(0, show_msgbox)
 
+
+    ## TODO: handle starting and stopping roasting, monitoring mode (on/off) 
     def _on_ws_message(self, data):
         self.logger.info(f"LiveBroadcastPlugin received: {data}")
 

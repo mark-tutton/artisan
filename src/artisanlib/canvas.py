@@ -1908,12 +1908,18 @@ class tgraphcanvas(FigureCanvas):
         self.autosaveprefix:str = ''
         self.autosavepath:str = ''
         self.autosavealsopath:str = ''
+        self.autosavealsopath2:str = ''
+        self.autosavealsopath3:str = ''
         self.autosaveaddtorecentfilesflag:bool = False
 
         self.autosaveimage:bool = False # if true save an image along alog files
+        self.autosaveimage2:bool = False # if true save an image along alog files
+        self.autosaveimage3:bool = False # if true save an image along alog files
 
         self.autoasaveimageformat_types:List[str] = ['PDF', 'PDF Report', 'SVG', 'PNG', 'JPEG', 'CSV', 'JSON']
         self.autosaveimageformat:str = 'PDF' # one of the supported image file formats PDF, PDF Report, SVG, PNG, JPEG, CSV, JSON
+        self.autosaveimageformat2:str = 'CSV' # one of the supported image file formats PDF, PDF Report, SVG, PNG, JPEG, CSV, JSON
+        self.autosaveimageformat3:str = 'JSON' # one of the supported image file formats PDF, PDF Report, SVG, PNG, JPEG, CSV, JSON
 
         #used to place correct height of text to avoid placing text over text (annotations)
         self.ystep_down:int = 0
