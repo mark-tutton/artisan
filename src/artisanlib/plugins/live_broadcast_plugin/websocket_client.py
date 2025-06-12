@@ -5,7 +5,6 @@ import time
 from typing import Optional, Callable, List
 from threading import Thread
 
-# Try to import websockets, but make it optional
 try:
     import websockets
     WEBSOCKETS_AVAILABLE = True
@@ -60,6 +59,9 @@ class WebSocketBroadcaster(QObject):
         self._signal_timer.timeout.connect(self._emit_pending_signals)
         self._signal_timer.start(100)  # Check every 100ms
         self._pending_signals = []
+
+        # handle post messages from server
+        self._message_callbacks = []
         
     def add_connection_handler(self, handler: Callable[[], None]) -> None:
         """Add handler for connection events"""
@@ -206,12 +208,22 @@ class WebSocketBroadcaster(QObject):
                 _log.error(f"Failed to send message: {e}")
                 self._is_connected = False  
                 self._queue_signal('error', f"Failed to send message: {e}")
+
+    def add_message_callback(self, callback):
+        self._message_callbacks.append(callback)
     
     async def _handle_message(self, message: str) -> None:
         """Handle incoming messages from the server"""
+        print("WebSocketBroadcaster: Raw message received:", message)
         try:
             data = json.loads(message)
             _log.debug(f"Received message: {data}")
+
+            for cb in self._message_callbacks:
+                try:
+                    cb(data)
+                except Exception as e:
+                    _log.error(f"Message callback error: {e}")
             
             # Handle different message types
             if data.get("type") == "ping":

@@ -151,7 +151,9 @@ class wsport:
         return await self._write_queue.get()
 
     async def consumer(self, message:str) -> None:
+        
         j = json.loads(message)
+        print("wsport.py received message:", j)
         if self.aw.seriallogflag:
             self.aw.addserial(f'wsport onMessage(): {j}')
         if self.id_node in j:

@@ -120,6 +120,9 @@ class LiveBroadcastPlugin(ArtisanPlugin):
             self._start_broadcaster()
         else:
             self.logger.info("Auto-start disabled, broadcaster not started")
+
+        if self.broadcaster:
+            self.broadcaster.add_message_callback(self._on_ws_message)
     
     def create_menu(self, parent_menu: QMenu) -> QMenu:
         menu = QMenu(self.name, parent_menu)
@@ -660,6 +663,11 @@ class LiveBroadcastPlugin(ArtisanPlugin):
                     reconnect_interval=self.config.reconnect_interval,
                     max_reconnect_attempts=self.config.max_reconnect_attempts
                 )
+
+                 # Register the message callback
+                self.broadcaster.add_message_callback(self._on_ws_message)
+                print("LiveBroadcastPlugin: WebSocket message callback registered")
+                self.logger.info("LiveBroadcastPlugin: WebSocket message callback registered")
                 
                 # Connect status signals
                 self.broadcaster.connected.connect(lambda: self._update_status("Connected"))
@@ -691,7 +699,6 @@ class LiveBroadcastPlugin(ArtisanPlugin):
             dialog = LiveBroadcastConfigDialog(self.main_window, self.config)
             if dialog.exec():
                 # Save configuration
-                # self.config.save()
                 self.config.save_config()
                 
                 # Restart broadcaster if it's running
@@ -761,7 +768,95 @@ class LiveBroadcastPlugin(ArtisanPlugin):
         status_text = "\n".join(status_info)
         self.logger.info(f"Status:\n{status_text}")
         QMessageBox.information(self.main_window, "Live Broadcast Status", status_text)
-    
+
+    def _show_incoming_message(self, data):
+        msg = json.dumps(data, indent=2)
+        def show_msgbox():
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.information(self.main_window, "Incoming WebSocket Message", msg)
+        QTimer.singleShot(0, show_msgbox)
+
+    def _on_ws_message(self, data):
+        self.logger.info(f"LiveBroadcastPlugin received: {data}")
+
+        if hasattr(self.main_window, "addserial"):
+            self.main_window.addserial(f"LiveBroadcastPlugin received: {data}")
+
+        if hasattr(self.main_window, "addmessage"):
+            self.main_window.addmessage(f"LiveBroadcastPlugin received: {data}")
+        
+        # Handle custom_event messages 
+        if data.get("type") == "custom_event":
+            event_data = data.get("data", {})
+            description = event_data.get("description", "").lower()
+            
+            if "charge" in description:
+                self._mark_event_on_canvas("charge")
+            elif "dry" in description:
+                self._mark_event_on_canvas("dry_end")
+            elif "fc start" in description:
+                self._mark_event_on_canvas("fc_start")
+            elif "fc end" in description:
+                self._mark_event_on_canvas("fc_end")
+            elif "sc start" in description:
+                self._mark_event_on_canvas("sc_start")
+            elif "sc end" in description:
+                self._mark_event_on_canvas("sc_end")
+            elif "drop" in description:
+                self._mark_event_on_canvas("drop")
+            elif "cool" in description:
+                self._mark_event_on_canvas("cool_end")
+        
+        # Handle pushMessage messages (wsport.py format)
+            push_message = data.get("pushMessage")
+            
+            if push_message == "addEvent":
+                event_data = data.get("data", {})
+                event_name = event_data.get("event")
+                
+                if event_name == "firstCrackBeginningEvent":
+                    self._mark_event_on_canvas("fc_start")
+                elif event_name == "firstCrackEndEvent":
+                    self._mark_event_on_canvas("fc_end")
+                elif event_name == "secondCrackBeginningEvent":
+                    self._mark_event_on_canvas("sc_start")
+                elif event_name == "secondCrackEndEvent":
+                    self._mark_event_on_canvas("sc_end")
+                elif event_name == "colorChangeEvent":
+                    self._mark_event_on_canvas("dry_end")
+            
+            elif push_message == "startRoasting":
+                self._mark_event_on_canvas("charge")
+            
+            elif push_message == "endRoasting":
+                self._mark_event_on_canvas("drop")
+
+    def _mark_event_on_canvas(self, event_name):
+        qmc = getattr(self.main_window, "qmc", None)
+        if not qmc:
+            self.logger.error("Canvas (qmc) not found!")
+            return
+
+        # Map event_name to the correct method / signal
+        if event_name == "charge" and hasattr(qmc, "markCharge"):
+            qmc.markCharge()
+        elif event_name == "dry_end" and hasattr(qmc, "markDryEnd"):
+            qmc.markDryEnd() 
+        elif event_name == "fc_start" and hasattr(qmc, "mark1Cstart"):
+            qmc.mark1Cstart()
+        elif event_name == "fc_end" and hasattr(qmc, "mark1Cend"):
+            qmc.mark1Cend()
+        elif event_name == "sc_start" and hasattr(qmc, "mark2Cstart"):
+            qmc.mark2Cstart()
+        elif event_name == "sc_end" and hasattr(qmc, "mark2Cend"):
+            qmc.mark2Cend()
+        elif event_name == "drop" and hasattr(qmc, "markDrop"):
+            qmc.markDrop()
+        elif event_name == 'cool_end' and hasattr(qmc, 'markCoolEnd'): 
+            qmc.markCoolEnd()
+        else:
+            self.logger.warning(f"Unknown or unmapped event: {event_name}")
+
     def cleanup(self) -> None:
         """Cleanup when plugin is disabled/unloaded"""
         if self.broadcaster:
