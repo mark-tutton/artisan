@@ -64,6 +64,8 @@ import dateutil.parser
 import copy as copyd
 import arabic_reshaper # type:ignore[import-untyped]
 from pathlib import Path
+import requests
+
 try:
     from bidi import get_display # type:ignore[import-untyped] # newer rust based implementation of the above Python implementation
 except Exception: # pylint: disable=broad-except
@@ -12737,6 +12739,16 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
         else:
             self.resizeImgToSize(0,0,self.qmc.autosaveimageformat,fname=filename)
 
+    
+    # Add support to upload to external server
+    def upload_to_server(self, filepath: str, server_url: str, extra_params: dict = None):
+        with open(filepath, 'rb') as f:
+            files = {'file': (os.path.basename(filepath), f)}
+            data = extra_params or {}
+            response = requests.post(server_url, files=files, data=data)
+            response.raise_for_status()
+            return response
+
     # #automatation of filename when saving a file through keyboard shortcut. Speeds things up for batch roasting.
     # # returns filename on success, None otherwise
     # def automaticsave(self, interactive:bool = True) -> Optional[str]:
@@ -12796,7 +12808,7 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
     #         self.qmc.adderror((QApplication.translate('Error Message', 'Error:') + ' automaticsave() {0}').format(str(e)),getattr(exc_tb, 'tb_lineno', '?'))
     #     return None
 
-    # Add support to handle saving more than 2 formats via autosave
+    # Add support to handle saving more than 2 formats via autosave and uploading to external server
     def automaticsave(self, interactive:bool = True) -> Optional[str]:
         try:
             if self.qmc.autosavepath and self.qmc.autosaveflag:
@@ -12839,8 +12851,42 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
                                 other_filename_path = os.path.join(self.qmc.autosavepath, filename)
                             if other_filename_path.endswith('.alog'):
                                 other_filename_path = other_filename_path[0:-5]
+
+                            # Determine the correct extension
+                            ext_map = {
+                                'PDF': '.pdf',
+                                'PDF Report': '.pdf',
+                                'SVG': '.svg',
+                                'PNG': '.png',
+                                'JPEG': '.jpg',
+                                'CSV': '.csv',
+                                'JSON': '.json'
+                            }
+                            ext = ext_map.get(fmt, '')
+                            save_path = other_filename_path + ext
+
                             self.qmc.autosaveimageformat = fmt
                             self.autosave(other_filename_path)
+
+                             # --- Upload to external server if enabled ---
+                            if getattr(self.qmc, 'autosave_upload_to_server', False):
+                                server_url = getattr(self.qmc, 'autosave_server_url', '')
+                                if hasattr(self, "addserial"):
+                                    self.addserial(f"Uploading {save_path} to server.")
+                                if server_url:
+                                    try:
+                                        if hasattr(self, "addserial"):
+                                            self.addserial(f"Uploading {save_path} to server.")
+                                        self.upload_to_server(save_path, server_url, {'format': fmt})
+                                        if hasattr(self, "addmessage"):
+                                            self.addmessage(f"Uploaded {save_path} to server.")
+
+                                    except Exception as e:
+                                        if hasattr(self, "addserial"):
+                                            self.addserial(f"Failed to upload {save_path}: {e}")
+                                        if hasattr(self, "addmessage"):
+                                            self.addmessage(f"Failed to upload {save_path}: {e}")
+
                     self.qmc.autosaveimageformat = orig_fmt
                     # --- END ---
 

@@ -104,6 +104,12 @@ class autosaveDlg(ArtisanDialog):
         self.pathAlsoEdit3.setToolTip(QApplication.translate('Tooltip', 'Sets the directory to store the third save also files'))
         pathAlsoButton3.clicked.connect(lambda: self.pathAlsoEdit3.setText(self.aw.ArtisanExistingDirectoryDialog(msg=QApplication.translate('Form Caption','AutoSave Save Also Path 3'))))
 
+        # Add support to upload to external server
+        self.uploadToServerCheckbox = QCheckBox(QApplication.translate('CheckBox','Upload to external server'))
+        self.uploadToServerCheckbox.setChecked(getattr(self.aw.qmc, 'autosave_upload_to_server', False))
+        self.serverUrlEdit = QLineEdit(getattr(self.aw.qmc, 'autosave_server_url', ''))
+        self.serverUrlEdit.setPlaceholderText("http://localhost:4000/upload")
+
 
         try:
             if not self.aw.QtWebEngineSupport:
@@ -181,6 +187,11 @@ class autosaveDlg(ArtisanDialog):
         autolayout.addWidget(self.pathAlsoEdit3,10,1,1,2)
 
 
+        # Add support to upload to external server
+        autolayout.addWidget(self.uploadToServerCheckbox, 11, 0, Qt.AlignmentFlag.AlignRight)
+        autolayout.addWidget(self.serverUrlEdit, 11, 1, 1, 2)
+
+
         autolayout.setColumnStretch(0,0)
         autolayout.setColumnStretch(1,10)
         autolayout.setColumnStretch(2,0)
@@ -256,6 +267,10 @@ class autosaveDlg(ArtisanDialog):
         self.aw.qmc.autosaveimage3 = self.autopdfcheckbox3.isChecked()
         self.aw.qmc.autosaveimageformat3 = self.imageTypesComboBox3.currentText()
         self.aw.qmc.autosavealsopath3 = self.pathAlsoEdit3.text()
+
+        # Add support to upload to external server
+        self.aw.qmc.autosave_upload_to_server = self.uploadToServerCheckbox.isChecked()
+        self.aw.qmc.autosave_server_url = self.serverUrlEdit.text()
 
 
         self.close()
