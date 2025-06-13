@@ -2865,7 +2865,7 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
             self.resetAction.triggered.connect(self.resetApplication)
             self.helpMenu.addAction(self.resetAction)
 
-         # Create  s menu in menuBar
+         # Create  plugins menu in menuBar
         self.menuPlugins = menuBar.addMenu('&' + QApplication.translate('Menu', 'Plugins'))
     
 
@@ -4365,12 +4365,16 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
         """Initialize and register plugins"""
         from artisanlib.plugins.rest_plugin import RESTPlugin
         from artisanlib.plugins.live_broadcast_plugin import LiveBroadcastPlugin
+        from artisanlib.plugins.inventory_fetcher import InventoryFetcherPlugin
         # from artisanlib.plugins.websocket_plugin import WebSocketPlugin
         # from artisanlib.plugins.erp_plugin import ERPPlugin
         
         # Register plugins
         self.plugin_manager.register_plugin(RESTPlugin)
         self.plugin_manager.register_plugin(LiveBroadcastPlugin)
+        self.plugin_manager.register_plugin(InventoryFetcherPlugin)
+        self.inventory_fetcher_plugin = InventoryFetcherPlugin()
+        self.inventory_fetcher_plugin.initialize(self)
         # self.plugin_manager.register_plugin(WebSocketPlugin)
         # self.plugin_manager.register_plugin(ERPPlugin)
         
@@ -25065,12 +25069,29 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
         self.update_minieventline_visibility()
         self.updateExtraButtonsVisibility()
 
+    # @pyqtSlot()
+    # @pyqtSlot(bool)
+    # def editgraph(self, _:bool = False) -> None:
+    #     if self.editgraphdialog is not False and self.editgraphdialog is None: # Roast Properties dialog is not blocked!
+    #         from artisanlib.roast_properties import editGraphDlg
+    #         self.editgraphdialog = editGraphDlg(self,self,self.editGraphDlg_activeTab)
+    #         self.editgraphdialog.show()
+
     @pyqtSlot()
     @pyqtSlot(bool)
     def editgraph(self, _:bool = False) -> None:
         if self.editgraphdialog is not False and self.editgraphdialog is None: # Roast Properties dialog is not blocked!
             from artisanlib.roast_properties import editGraphDlg
             self.editgraphdialog = editGraphDlg(self,self,self.editGraphDlg_activeTab)
+            
+            # ADD THIS: Set up inventory integration
+            if hasattr(self, 'inventory_fetcher_plugin') and self.inventory_fetcher_plugin:
+                try:
+                    from artisanlib.plugins.inventory_fetcher.roast_properties_patch import setup_inventory_integration
+                    setup_inventory_integration(self.editgraphdialog, self.inventory_fetcher_plugin)
+                except Exception as e:
+                    _log.error(f"Failed to set up inventory integration: {e}")
+            
             self.editgraphdialog.show()
 
     @pyqtSlot()

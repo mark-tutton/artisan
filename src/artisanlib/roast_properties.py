@@ -557,6 +557,42 @@ class editGraphDlg(ArtisanResizeablDialog):
     def __init__(self, parent:QWidget, aw:'ApplicationWindow', activeTab:int = 0) -> None:
         super().__init__(parent, aw)
 
+        # # At the start of __init__, after super().__init__(parent, aw)
+        # self.inventory_label = QLabel("Inventory:")
+        # self.inventory_combo = QComboBox()
+        # self.inventory_refresh_button = QPushButton("Refresh")
+
+        # self.inventory_plugin = getattr(aw, "inventory_fetcher_plugin", None)
+
+        # if self.inventory_plugin:
+        #     # Connect the signal to update the combo when beans are fetched
+        #     # self.inventory_plugin.signals.inventory_updated.connect(
+        #     #     lambda beans: self.inventory_plugin.populate_beans_combo(self.inventory_combo)
+        #     # )
+        #     self.inventory_plugin.signals.inventory_updated.connect(self.update_inventory_combo)
+        #     # Now it's safe to use self.inventory_combo
+        #     self.inventory_plugin.fetch_beans()
+        #     self.inventory_refresh_button.clicked.connect(
+        #         lambda: [
+        #             self.inventory_plugin.fetch_beans(),
+        #             self.inventory_plugin.populate_beans_combo(self.inventory_combo)
+        #         ]
+        #     )
+        #     def on_inventory_selected(index):
+        #         bean = self.inventory_plugin.get_selected_bean(self.inventory_combo)
+        #         if bean:
+        #             if hasattr(self, "beansedit"):
+        #                 self.beansedit.setPlainText(bean.get("name", ""))
+        #             if hasattr(self, "bean_density_in_edit"):
+        #                 self.bean_density_in_edit.setText(str(bean.get("density", "")))
+        #             if hasattr(self, "moisture_greens_edit"):
+        #                 self.moisture_greens_edit.setText(str(bean.get("moisture", "")))
+        #             if hasattr(self, "bean_size_min_edit"):
+        #                 self.bean_size_min_edit.setText(str(bean.get("bean_size_min", "")))
+        #             if hasattr(self, "bean_size_max_edit"):
+        #                 self.bean_size_max_edit.setText(str(bean.get("bean_size_max", "")))
+        #     self.inventory_combo.currentIndexChanged.connect(on_inventory_selected)
+
         self.ETname = self.aw.qmc.device_name_subst(self.aw.ETname)
         self.BTname = self.aw.qmc.device_name_subst(self.aw.BTname)
 
@@ -1407,6 +1443,31 @@ class editGraphDlg(ArtisanResizeablDialog):
             plusLine.setStretch(4, 2)
             plusLine.setStretch(6, 1)
 
+
+            # # --- Inventory controls ---
+            # self.inventory_label = QLabel("Inventory:")
+            # self.inventory_combo = QComboBox()
+            # self.inventory_refresh_button = QPushButton("Refresh")
+
+            # plusLine.addSpacing(15)
+            # plusLine.addWidget(self.inventory_label)
+            # plusLine.addWidget(self.inventory_combo)
+            # plusLine.addWidget(self.inventory_refresh_button)
+            # # --- Inventory controls ---
+            # self.inventory_label = QLabel("Inventory:")
+            # self.inventory_combo = QComboBox()
+            # self.inventory_refresh_button = QPushButton("Refresh")
+
+            # plusLine.addSpacing(15)
+            # plusLine.addWidget(self.inventory_label)
+            # plusLine.addWidget(self.inventory_combo)
+            # plusLine.addWidget(self.inventory_refresh_button)
+
+            # # Ensure visibility and enabled state
+            # self.inventory_combo.setVisible(True)
+            # self.inventory_combo.setEnabled(True)
+            # self.inventory_combo.show()
+
             self.label_origin_flag = QCheckBox(QApplication.translate('CheckBox','Standard bean labels'))
             self.label_origin_flag.setToolTip(QApplication.translate('Tooltip',"Beans are listed as 'origin, name' if ticked, otherwise as 'name, origin'"))
             self.label_origin_flag.setChecked(bool(plus.stock.coffee_label_normal_order))
@@ -1715,6 +1776,18 @@ class editGraphDlg(ArtisanResizeablDialog):
         # some tabs are not rendered at all on Windows using Qt v6.5.1 (https://bugreports.qt.io/projects/QTBUG/issues/QTBUG-114204?filter=allissues)
         QTimer.singleShot(50, self.setActiveTab)
 
+    def update_inventory_combo(self, beans):
+        print("DEBUG: update_inventory_combo called with beans:", len(beans) if beans else 0)
+        if hasattr(self, "inventory_combo") and self.inventory_combo is not None:
+            # Use self.aw instead of self.main_window
+            if hasattr(self.aw, "addmessage"):
+                self.aw.addmessage(f"DEBUG: update_inventory_combo called with beans: {len(beans) if beans else 0}")
+            self.inventory_plugin.populate_beans_combo(self.inventory_combo)
+        else:
+            if hasattr(self.aw, "addmessage"):
+                self.aw.addmessage("DEBUG: inventory_combo not available")
+
+            
     def updateWeightOutDefectsLabel(self) -> None:
         self.defectslabel.setText(f"<b>{QApplication.translate('Label', 'Defects')}</b>" if self.aw.qmc.roasted_defects_mode else
                 f"<b>{QApplication.translate('Label', 'Yield')}</b>")
@@ -1995,7 +2068,7 @@ class editGraphDlg(ArtisanResizeablDialog):
             self.plus_selected_line.setText(line)
         except Exception as e: # pylint: disable=broad-except
             _log.exception(e)
-
+        
     @pyqtSlot()
     def beansEdited(self) -> None:
         self.modified_beans = self.beansedit.toPlainText()
@@ -2745,6 +2818,13 @@ class editGraphDlg(ArtisanResizeablDialog):
         self.aw.editgraphdialog = None
         if self.stockWorker is not None and self.updateStockSignalConnection is not None:
             self.stockWorker.updatedSignal.disconnect(self.updateStockSignalConnection)
+        
+        try:
+            if hasattr(self, "inventory_plugin") and self.inventory_plugin is not None:
+                self.inventory_plugin.signals.inventory_updated.disconnect(self.update_inventory_combo)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).exception("Failed to disconnect inventory_updated signal: %s", e)
 
     # calcs volume (in ml) from density (in g/l) and weight (in g)
     @staticmethod
