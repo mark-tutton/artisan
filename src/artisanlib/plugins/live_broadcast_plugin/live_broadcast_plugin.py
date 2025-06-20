@@ -29,6 +29,8 @@ _log = logging.getLogger(__name__)
 class LiveBroadcastSignals(QObject):
     """A dedicated QObject to handle signals for the LiveBroadcastPlugin."""
     mark_event_signal = pyqtSignal(str, bool)
+    toggle_monitoring_signal = pyqtSignal(bool)
+    toggle_roasting_signal = pyqtSignal(bool)
 
 class LiveBroadcastPlugin(ArtisanPlugin):
     """Plugin for broadcasting live roast data and events to external servers"""
@@ -87,6 +89,15 @@ class LiveBroadcastPlugin(ArtisanPlugin):
             if hasattr(main_window.qmc, 'updategraphicsSignal'):
                 main_window.qmc.updategraphicsSignal.connect(self._on_data_update)
                 self.logger.info("Connected to updategraphicsSignal")
+            
+            # Connect control signals
+            if hasattr(main_window.qmc, 'ToggleMonitor'):
+                self.signals.toggle_monitoring_signal.connect(main_window.qmc.ToggleMonitor)
+                self.logger.info("Connected toggle_monitoring_signal to qmc.onoff")
+            if hasattr(main_window.qmc, 'ToggleRecorder'):
+                self.signals.toggle_roasting_signal.connect(main_window.qmc.ToggleRecorder)
+                self.logger.info("Connected toggle_roasting_signal to qmc.startstop")
+            
             
             # Connect to event signals
             signal_connections = [
@@ -802,7 +813,6 @@ class LiveBroadcastPlugin(ArtisanPlugin):
         QTimer.singleShot(0, show_msgbox)
 
 
-    ## TODO: handle starting and stopping roasting, monitoring mode (on/off) 
     def _on_ws_message(self, data):
         self.logger.info(f"LiveBroadcastPlugin received: {data}")
 
@@ -811,6 +821,21 @@ class LiveBroadcastPlugin(ArtisanPlugin):
 
         if hasattr(self.main_window, "addmessage"):
             self.main_window.addmessage(f"LiveBroadcastPlugin received: {data}")
+
+
+        msg_type = data.get("type")
+
+        # Handle roast control messages
+        if msg_type == "roast_control":
+            command = data.get("command")
+            if command == "toggle_monitoring":
+                self.logger.info("Received command to toggle monitoring state (ON/OFF).")
+                self.signals.toggle_monitoring_signal.emit(False)
+            elif command == "toggle_roasting":
+                self.logger.info("Received command to toggle roasting state (START/DROP).")
+                self.signals.toggle_roasting_signal.emit(False)
+            else:
+                self.logger.warning(f"Unknown roast_control command: {command}")
 
         # Handle roast_event messages
         if data.get("type") == "roast_event":

@@ -165,7 +165,16 @@ class WebSocketBroadcaster(QObject):
                         except Exception as e:
                             _log.error(f"Connection handler error: {e}")
                     
+                    
                     _log.info(f"Connected to WebSocket server at {self.url}")
+
+
+                    # Send identification message to the server
+                    await websocket.send(json.dumps({
+                        "type": "artisan_client_identification"
+                    }))
+                    _log.info("Sent identification to server.")
+
                     
                     # Handle incoming messages
                     async for message in websocket:
