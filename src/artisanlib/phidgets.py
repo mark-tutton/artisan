@@ -62,6 +62,12 @@ class PhidgetManager:
     def attachHandler(self,_:Manager , attachedChannel:'Phidget') -> None: # type:ignore[no-any-unimported,unused-ignore]
         try:
             if attachedChannel.getParent().getDeviceClass() != DeviceClass.PHIDCLASS_HUB:
+                _log.info('Phidget attached: %s (Serial: %s, Device: %s, Channel: %s, Port: %s)', 
+                         attachedChannel.getDeviceName(),
+                         attachedChannel.getDeviceSerialNumber(),
+                         attachedChannel.getDeviceID(),
+                         attachedChannel.getChannel(),
+                         attachedChannel.getHubPort() if attachedChannel.getIsHubPortDevice() else 'N/A')
                 # we do not add the hub itself
                 self.addChannel(attachedChannel)
         except Exception as e: # pylint: disable=broad-except
@@ -69,12 +75,24 @@ class PhidgetManager:
 
     def detachHandler(self, _:Manager, attachedChannel:'Phidget') -> None: # type:ignore[no-any-unimported,unused-ignore]
         try:
+            _log.info('Phidget detached: %s (Serial: %s, Device: %s, Channel: %s, Port: %s)', 
+                attachedChannel.getDeviceName(),
+                attachedChannel.getDeviceSerialNumber(),
+                attachedChannel.getDeviceID(),
+                attachedChannel.getChannel(),
+                attachedChannel.getHubPort() if attachedChannel.getIsHubPortDevice() else 'N/A')
             self.deleteChannel(attachedChannel)
         except Exception as e: # pylint: disable=broad-except
             _log.exception(e)
 
     def addChannel(self,channel:'Phidget') -> None: # type:ignore[no-any-unimported,unused-ignore]
 #        _log.debug("addChannel: %s %s", channel, type(channel))
+        _log.debug("Adding channel: %s (Serial: %s, Device: %s, Channel: %s, Port: %s)", 
+                        channel.getDeviceName(),
+                        channel.getDeviceSerialNumber(),
+                        channel.getDeviceID(),
+                        channel.getChannel(),
+                        channel.getHubPort() if channel.getIsHubPortDevice() else 'N/A')
         try:
             self.managersemaphore.acquire(1)
             state:bool = True
@@ -92,11 +110,13 @@ class PhidgetManager:
                             if hupportdevice:
                                 if k.getIsHubPortDevice() != 0:
                                     self.attachedPhidgetChannels[k] = False
+                                    _log.debug("Reserved hub port channel due to VINT device: %s", k.getDeviceName())
                                 #else:
                                 #  other is also a VINT device. Do nothing
                             elif k.getIsHubPortDevice() == 0:
                                 # there is a port registered with connected VINT device we deactivate this hubport channel
                                 state = False
+                                _log.debug("Deactivated hub port channel due to existing VINT device: %s", channel.getDeviceName())
                             #else:
                             #   do nothing
                     except Exception: # pylint: disable=broad-except
@@ -104,6 +124,10 @@ class PhidgetManager:
             except Exception: # pylint: disable=broad-except
                 pass # channel might fail on channel.getHub() like the USB 1048 Phidgets
             self.attachedPhidgetChannels[channel] = state
+            _log.info("Channel added with state %s: %s (Serial: %s)", 
+                     "AVAILABLE" if state else "RESERVED",
+                     channel.getDeviceName(),
+                     channel.getDeviceSerialNumber())
         except Exception as e:  # pylint: disable=broad-except
             _log.exception(e)
         finally:
@@ -133,6 +157,7 @@ class PhidgetManager:
             except Exception: # pylint: disable=broad-except
                 pass # raises an exception on non VINT Phidget modules
             self.attachedPhidgetChannels.pop(channel, None)
+            _log.info("Channel deleted: %s (Serial: %s)", channel.getDeviceName(), channel.getDeviceSerialNumber())
         except Exception as e: # pylint: disable=broad-except
             _log.exception(e)
         finally:
@@ -176,6 +201,11 @@ class PhidgetManager:
     # should be called from the attach handler that binds this hardware channel to a software channel
     def reserveChannel(self,channel:'Phidget') -> None: # type:ignore[no-any-unimported,unused-ignore]
         _log.debug('reserveChannel: %s', channel)
+        _log.info('Reserving channel: %s (Serial: %s, Device: %s, Channel: %s)', 
+                 channel.getDeviceName(),
+                 channel.getDeviceSerialNumber(),
+                 channel.getDeviceID(),
+                 channel.getChannel())
         try:
             self.managersemaphore.acquire(1)
             if channel is not None and channel in self.attachedPhidgetChannels:
@@ -201,6 +231,11 @@ class PhidgetManager:
     # should be called from the detach handler that releases this hardware channel from a software channel
     def releaseChannel(self,channel:'Phidget') -> None: # type:ignore[no-any-unimported,unused-ignore]
         _log.debug('releaseChannel: %s', channel)
+        _log.info('Releasing channel: %s (Serial: %s, Device: %s, Channel: %s)', 
+                 channel.getDeviceName(),
+                 channel.getDeviceSerialNumber(),
+                 channel.getDeviceID(),
+                 channel.getChannel())
         try:
             self.managersemaphore.acquire(1)
             if channel is not None and channel in self.attachedPhidgetChannels:
@@ -213,6 +248,7 @@ class PhidgetManager:
                         try:
                             if k.getHub() == hub and k.getHubPort() == port:
                                 self.attachedPhidgetChannels[k] = True
+                                _log.debug("Also released related channel: %s", k.getDeviceName())
                         except Exception: # pylint: disable=broad-except
                             pass
         except Exception as e: # pylint: disable=broad-except
@@ -279,6 +315,34 @@ class PhidgetManager:
         except Exception as e: # pylint: disable=broad-except
             _log.exception(e)
             return None, None
+        finally:
+            if self.managersemaphore.available() < 1:
+                self.managersemaphore.release(1)
+
+# Add a method to list all connected Phidgets
+    def listConnectedPhidgets(self) -> None:
+        """Log all currently connected Phidget devices"""
+        try:
+            self.managersemaphore.acquire(1)
+            _log.info("=== Connected Phidget Devices ===")
+            if not self.attachedPhidgetChannels:
+                _log.info("No Phidget devices connected")
+            else:
+                for channel, available in self.attachedPhidgetChannels.items():
+                    try:
+                        _log.info("Device: %s | Serial: %s | Device ID: %s | Channel: %s | Port: %s | Status: %s | Local: %s",
+                                 channel.getDeviceName(),
+                                 channel.getDeviceSerialNumber(),
+                                 channel.getDeviceID(),
+                                 channel.getChannel(),
+                                 channel.getHubPort() if channel.getIsHubPortDevice() else 'N/A',
+                                 "AVAILABLE" if available else "RESERVED",
+                                 "Yes" if channel.getIsLocal() else "No")
+                    except Exception as e:
+                        _log.warning("Could not get info for channel: %s - %s", channel, e)
+            _log.info("=== End Connected Phidget Devices ===")
+        except Exception as e:
+            _log.exception(e)
         finally:
             if self.managersemaphore.available() < 1:
                 self.managersemaphore.release(1)

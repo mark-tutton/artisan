@@ -17,7 +17,6 @@ except ImportError:
 from ..base import ArtisanPlugin
 from .config import LiveBroadcastConfig
 
-# Try to import WebSocketBroadcaster, but handle missing dependency gracefully
 try:
     from .websocket_client import WebSocketBroadcaster, WEBSOCKETS_AVAILABLE
 except ImportError:
@@ -26,8 +25,15 @@ except ImportError:
 
 _log = logging.getLogger(__name__)
 
+
+class LiveBroadcastSignals(QObject):
+    """A dedicated QObject to handle signals for the LiveBroadcastPlugin."""
+    mark_event_signal = pyqtSignal(str, bool)
+
 class LiveBroadcastPlugin(ArtisanPlugin):
     """Plugin for broadcasting live roast data and events to external servers"""
+    
+    mark_event_signal = pyqtSignal(str, bool)
     
     @property
     def name(self) -> str:
@@ -39,6 +45,7 @@ class LiveBroadcastPlugin(ArtisanPlugin):
     
     def __init__(self):
         super().__init__()
+        self.signals = LiveBroadcastSignals()
         self.config = LiveBroadcastConfig()
         self.broadcaster: Optional[WebSocketBroadcaster] = None
         self.update_timer: Optional[QTimer] = None
@@ -59,6 +66,8 @@ class LiveBroadcastPlugin(ArtisanPlugin):
         
     def initialize(self, main_window: QMainWindow) -> None:
         super().initialize(main_window)
+        
+        self.signals.mark_event_signal.connect(self._mark_event_on_canvas)
         
         # Check if websockets is available
         if not WEBSOCKETS_AVAILABLE:
@@ -246,48 +255,64 @@ class LiveBroadcastPlugin(ArtisanPlugin):
     def _on_charge_event(self, noaction: bool = False) -> None:
         """Handle CHARGE event"""
         self.logger.info(f"CHARGE event triggered (noaction={noaction})")
+        if noaction:
+            return
         if WEBSOCKETS_AVAILABLE:
             self._broadcast_event("charge")
     
     def _on_dry_end_event(self, noaction: bool = False) -> None:
         """Handle DRY END event"""
         self.logger.info(f"DRY END event triggered (noaction={noaction})")
+        if noaction:
+            return
         if WEBSOCKETS_AVAILABLE:
             self._broadcast_event("dry_end")
     
     def _on_fc_start_event(self, noaction: bool = False) -> None:
         """Handle FC START event"""
         self.logger.info(f"FC START event triggered (noaction={noaction})")
+        if noaction:
+            return
         if WEBSOCKETS_AVAILABLE:
             self._broadcast_event("fc_start")
     
     def _on_fc_end_event(self, noaction: bool = False) -> None:
         """Handle FC END event"""
         self.logger.info(f"FC END event triggered (noaction={noaction})")
+        if noaction:
+            return
         if WEBSOCKETS_AVAILABLE:
             self._broadcast_event("fc_end")
     
     def _on_sc_start_event(self, noaction: bool = False) -> None:
         """Handle SC START event"""
         self.logger.info(f"SC START event triggered (noaction={noaction})")
+        if noaction:
+            return
         if WEBSOCKETS_AVAILABLE:
             self._broadcast_event("sc_start")
     
     def _on_sc_end_event(self, noaction: bool = False) -> None:
         """Handle SC END event"""
         self.logger.info(f"SC END event triggered (noaction={noaction})")
+        if noaction:
+            return
         if WEBSOCKETS_AVAILABLE:
             self._broadcast_event("sc_end")
     
     def _on_drop_event(self, noaction: bool = False) -> None:
         """Handle DROP event"""
         self.logger.info(f"DROP event triggered (noaction={noaction})")
+        if noaction:
+            return
         if WEBSOCKETS_AVAILABLE:
             self._broadcast_event("drop")
     
     def _on_cool_end_event(self, noaction: bool = False) -> None:
         """Handle COOL END event"""
         self.logger.info(f"COOL END event triggered (noaction={noaction})")
+        if noaction:
+            return
         if WEBSOCKETS_AVAILABLE:
             self._broadcast_event("cool_end")
     
@@ -786,76 +811,96 @@ class LiveBroadcastPlugin(ArtisanPlugin):
 
         if hasattr(self.main_window, "addmessage"):
             self.main_window.addmessage(f"LiveBroadcastPlugin received: {data}")
+
+        # Handle roast_event messages
+        if data.get("type") == "roast_event":
+            event_name = data.get("event")
+            if event_name:
+                self.logger.info(f"Marking event on canvas from roast_event: {event_name}")
+                # self._mark_event_on_canvas(event_name, noaction=True)
+                self.signals.mark_event_signal.emit(event_name, True)
+        
+
         
         # Handle custom_event messages 
         if data.get("type") == "custom_event":
             event_data = data.get("data", {})
             description = event_data.get("description", "").lower()
             
+
+            event_to_mark = None
             if "charge" in description:
-                self._mark_event_on_canvas("charge")
+                event_to_mark = "charge"
             elif "dry" in description:
-                self._mark_event_on_canvas("dry_end")
+                event_to_mark = "dry_end"
             elif "fc start" in description:
-                self._mark_event_on_canvas("fc_start")
+                event_to_mark = "fc_start"
             elif "fc end" in description:
-                self._mark_event_on_canvas("fc_end")
+                event_to_mark = "fc_end"
             elif "sc start" in description:
-                self._mark_event_on_canvas("sc_start")
+                event_to_mark = "sc_start"
             elif "sc end" in description:
-                self._mark_event_on_canvas("sc_end")
+                event_to_mark = "sc_end"
             elif "drop" in description:
-                self._mark_event_on_canvas("drop")
+                event_to_mark = "drop"
             elif "cool" in description:
-                self._mark_event_on_canvas("cool_end")
+                event_to_mark = "cool_end"
+
+            if event_to_mark:
+                self.signals.mark_event_signal.emit(event_to_mark, True)
+
         
         # Handle pushMessage messages (wsport.py format)
-            push_message = data.get("pushMessage")
+        push_message = data.get("pushMessage")
             
-            if push_message == "addEvent":
-                event_data = data.get("data", {})
-                event_name = event_data.get("event")
-                
-                if event_name == "firstCrackBeginningEvent":
-                    self._mark_event_on_canvas("fc_start")
-                elif event_name == "firstCrackEndEvent":
-                    self._mark_event_on_canvas("fc_end")
-                elif event_name == "secondCrackBeginningEvent":
-                    self._mark_event_on_canvas("sc_start")
-                elif event_name == "secondCrackEndEvent":
-                    self._mark_event_on_canvas("sc_end")
-                elif event_name == "colorChangeEvent":
-                    self._mark_event_on_canvas("dry_end")
-            
-            elif push_message == "startRoasting":
-                self._mark_event_on_canvas("charge")
-            
-            elif push_message == "endRoasting":
-                self._mark_event_on_canvas("drop")
 
-    def _mark_event_on_canvas(self, event_name):
+        if push_message == "addEvent":
+            event_data = data.get("data", {})
+            event_name = event_data.get("event")
+
+            event_to_mark = None
+            if event_name == "firstCrackBeginningEvent":
+                event_to_mark = "fc_start"
+            elif event_name == "firstCrackEndEvent":
+                event_to_mark = "fc_end"
+            elif event_name == "secondCrackBeginningEvent":
+                event_to_mark = "sc_start"
+            elif event_name == "secondCrackEndEvent":
+                event_to_mark = "sc_end"
+            elif event_name == "colorChangeEvent":
+                event_to_mark = "dry_end"
+            
+            if event_to_mark:
+                self.signals.mark_event_signal.emit(event_to_mark, True)
+        
+        elif push_message == "startRoasting":
+            self.signals.mark_event_signal.emit("charge", True)
+        
+        elif push_message == "endRoasting":
+            self.signals.mark_event_signal.emit("drop", True)
+
+    def _mark_event_on_canvas(self, event_name, noaction=False):
         qmc = getattr(self.main_window, "qmc", None)
         if not qmc:
             self.logger.error("Canvas (qmc) not found!")
             return
 
-        # Map event_name to the correct method / signal
         if event_name == "charge" and hasattr(qmc, "markCharge"):
-            qmc.markCharge()
+            qmc.markCharge(noaction)
         elif event_name == "dry_end" and hasattr(qmc, "markDryEnd"):
-            qmc.markDryEnd() 
+            qmc.markDryEnd(noaction) 
         elif event_name == "fc_start" and hasattr(qmc, "mark1Cstart"):
-            qmc.mark1Cstart()
+            qmc.mark1Cstart(noaction)
         elif event_name == "fc_end" and hasattr(qmc, "mark1Cend"):
-            qmc.mark1Cend()
+            qmc.mark1Cend(noaction)
         elif event_name == "sc_start" and hasattr(qmc, "mark2Cstart"):
-            qmc.mark2Cstart()
+            qmc.mark2Cstart(noaction)
         elif event_name == "sc_end" and hasattr(qmc, "mark2Cend"):
-            qmc.mark2Cend()
+            qmc.mark2Cend(noaction)
         elif event_name == "drop" and hasattr(qmc, "markDrop"):
-            qmc.markDrop()
+            qmc.markDrop(noaction)
         elif event_name == 'cool_end' and hasattr(qmc, 'markCoolEnd'): 
-            qmc.markCoolEnd()
+            qmc.markCoolEnd(noaction)
         else:
             self.logger.warning(f"Unknown or unmapped event: {event_name}")
 
