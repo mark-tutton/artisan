@@ -42,14 +42,16 @@ class WebSocketBroadcaster(QObject):
         self.max_reconnect_attempts = max_reconnect_attempts
         self.reconnect_attempts = 0
         
-        self.websocket = None
+        # self.websocket = None
+        self.websocket: Optional['websockets.WebSocketClientProtocol'] = None
         self._is_connected = False 
         self.is_running = False
         
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[Thread] = None
         self._message_queue: List[str] = []
-        self._queue_lock = asyncio.Lock()
+        self._queue_lock: asyncio.Lock()
+        self._shutdown_event: Optional[asyncio.Event] = None
         
         self._connection_handlers: List[Callable[[], None]] = []
         self._disconnection_handlers: List[Callable[[], None]] = []
@@ -91,16 +93,22 @@ class WebSocketBroadcaster(QObject):
     
     def stop(self) -> None:
         """Stop the WebSocket client"""
+        if not self.is_running:
+            return
+        
+        _log.info("Requesting WebSocket broadcaster to stop...")
         self.is_running = False
         
-        if self._loop:
-            self._loop.call_soon_threadsafe(self._loop.stop)
+        # if self._loop:
+        #     self._loop.call_soon_threadsafe(self._loop.stop)
+        if self._loop and self._loop.is_running() and self._shutdown_event:
+            self._loop.call_soon_threadsafe(self._shutdown_event.set)
         
         if self._thread:
             self._thread.join(timeout=5)
         
-        if self.websocket:
-            asyncio.create_task(self.websocket.close())
+        # if self.websocket:
+        #     asyncio.create_task(self.websocket.close())
         
         self._is_connected = False
         _log.info("Stopped WebSocket broadcaster")
@@ -136,15 +144,92 @@ class WebSocketBroadcaster(QObject):
         """Run the asyncio event loop in a separate thread"""
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
-        
+
+        self._shutdown_event = asyncio.Event()
         try:
             self._loop.run_until_complete(self._connect_and_run())
         except Exception as e:
             _log.error(f"WebSocket loop error: {e}")
             # Queue error signal
             self._queue_signal('error', str(e))
+        # finally:
+        #     _log.info("Closing WebSocket loop")
+        #     self._loop.close()
         finally:
+            _log.info("Closing WebSocket event loop.")
+            tasks = asyncio.all_tasks(loop=self._loop)
+            for task in tasks:
+                task.cancel()
+            
+            async def gather_tasks():
+                await asyncio.gather(*tasks, return_exceptions=True)
+
+            if self._loop.is_running():
+                self._loop.run_until_complete(gather_tasks())
+
             self._loop.close()
+    
+    # async def _connect_and_run(self) -> None:
+    #     """Connect to WebSocket server and handle messages"""
+    #     while self.is_running:
+    #         try:
+    #             async with websockets.connect(self.url) as websocket:
+    #                 self.websocket = websocket
+    #                 self._is_connected = True 
+    #                 self.reconnect_attempts = 0  # Reset on successful connection
+                    
+    #                 # Queue connected signal
+    #                 self._queue_signal('connected')
+                    
+    #                 # Notify connection handlers
+    #                 for handler in self._connection_handlers:
+    #                     try:
+    #                         handler()
+    #                     except Exception as e:
+    #                         _log.error(f"Connection handler error: {e}")
+                    
+                    
+    #                 _log.info(f"Connected to WebSocket server at {self.url}")
+
+
+    #                 # Send identification message to the server
+    #                 await websocket.send(json.dumps({
+    #                     "type": "artisan_client_identification"
+    #                 }))
+    #                 _log.info("Sent identification to server.")
+
+                    
+    #                 # Handle incoming messages
+    #                 async for message in websocket:
+    #                     await self._handle_message(message)
+                        
+    #         except Exception as e:
+    #             self._is_connected = False  
+    #             self.websocket = None
+    #             self.reconnect_attempts += 1
+                
+    #             # Queue disconnected signal
+    #             self._queue_signal('disconnected')
+                
+    #             # Notify disconnection handlers
+    #             for handler in self._disconnection_handlers:
+    #                 try:
+    #                     handler()
+    #                 except Exception as handler_error:
+    #                     _log.error(f"Disconnection handler error: {handler_error}")
+                
+    #             _log.error(f"WebSocket connection error: {e}")
+                
+    #             # Check if we should stop trying to reconnect
+    #             if self.max_reconnect_attempts > 0 and self.reconnect_attempts >= self.max_reconnect_attempts:
+    #                 _log.error(f"Max reconnection attempts ({self.max_reconnect_attempts}) reached. Stopping.")
+    #                 self._queue_signal('error', f"Max reconnection attempts ({self.max_reconnect_attempts}) reached")
+    #                 self.is_running = False
+    #                 break
+                
+    #             # Wait before reconnecting
+    #             if self.is_running:
+    #                 await asyncio.sleep(self.reconnect_interval)
     
     async def _connect_and_run(self) -> None:
         """Connect to WebSocket server and handle messages"""
@@ -153,42 +238,39 @@ class WebSocketBroadcaster(QObject):
                 async with websockets.connect(self.url) as websocket:
                     self.websocket = websocket
                     self._is_connected = True 
-                    self.reconnect_attempts = 0  # Reset on successful connection
+                    self.reconnect_attempts = 0
                     
-                    # Queue connected signal
                     self._queue_signal('connected')
-                    
-                    # Notify connection handlers
                     for handler in self._connection_handlers:
                         try:
                             handler()
                         except Exception as e:
                             _log.error(f"Connection handler error: {e}")
                     
-                    
                     _log.info(f"Connected to WebSocket server at {self.url}")
 
-
-                    # Send identification message to the server
-                    await websocket.send(json.dumps({
-                        "type": "artisan_client_identification"
-                    }))
+                    await websocket.send(json.dumps({ "type": "artisan_client_identification" }))
                     _log.info("Sent identification to server.")
 
-                    
-                    # Handle incoming messages
-                    async for message in websocket:
-                        await self._handle_message(message)
+                    consumer_task = asyncio.create_task(self._consumer_handler(websocket))
+                    shutdown_task = asyncio.create_task(self._shutdown_event.wait())
+
+                    done, pending = await asyncio.wait(
+                        {consumer_task, shutdown_task},
+                        return_when=asyncio.FIRST_COMPLETED
+                    )
+
+                    for task in pending:
+                        task.cancel()
                         
+            except (websockets.exceptions.ConnectionClosed, asyncio.CancelledError, ConnectionRefusedError):
+                _log.info("Connection task stopped or connection refused.")
             except Exception as e:
                 self._is_connected = False  
                 self.websocket = None
                 self.reconnect_attempts += 1
                 
-                # Queue disconnected signal
                 self._queue_signal('disconnected')
-                
-                # Notify disconnection handlers
                 for handler in self._disconnection_handlers:
                     try:
                         handler()
@@ -197,16 +279,14 @@ class WebSocketBroadcaster(QObject):
                 
                 _log.error(f"WebSocket connection error: {e}")
                 
-                # Check if we should stop trying to reconnect
                 if self.max_reconnect_attempts > 0 and self.reconnect_attempts >= self.max_reconnect_attempts:
                     _log.error(f"Max reconnection attempts ({self.max_reconnect_attempts}) reached. Stopping.")
                     self._queue_signal('error', f"Max reconnection attempts ({self.max_reconnect_attempts}) reached")
                     self.is_running = False
                     break
                 
-                # Wait before reconnecting
-                if self.is_running:
-                    await asyncio.sleep(self.reconnect_interval)
+            if self.is_running:
+                await asyncio.sleep(self.reconnect_interval)
     
     async def _send_message(self, message: str) -> None:
         """Send a message to the WebSocket server"""
@@ -217,6 +297,26 @@ class WebSocketBroadcaster(QObject):
                 _log.error(f"Failed to send message: {e}")
                 self._is_connected = False  
                 self._queue_signal('error', f"Failed to send message: {e}")
+
+    async def _consumer_handler(self, websocket: "websockets.WebSocketClientProtocol"):
+            """Handle incoming messages in a loop."""
+            try:
+                async for message in websocket:
+                    await self._handle_message(message)
+            except websockets.exceptions.ConnectionClosed:
+                _log.info("Connection closed by server.")
+            except asyncio.CancelledError:
+                _log.info("Consumer task cancelled.")
+            finally:
+                if self._is_connected:
+                    self._is_connected = False
+                    self._queue_signal('disconnected')
+                    for handler in self._disconnection_handlers:
+                        try:
+                            handler()
+                        except Exception as handler_error:
+                            _log.error(f"Disconnection handler error: {handler_error}")
+
 
     def add_message_callback(self, callback):
         self._message_callbacks.append(callback)

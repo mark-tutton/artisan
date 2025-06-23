@@ -31,6 +31,7 @@ class LiveBroadcastSignals(QObject):
     mark_event_signal = pyqtSignal(str, bool)
     toggle_monitoring_signal = pyqtSignal(bool)
     toggle_roasting_signal = pyqtSignal(bool)
+    reset_roast_signal = pyqtSignal(bool)
 
 class LiveBroadcastPlugin(ArtisanPlugin):
     """Plugin for broadcasting live roast data and events to external servers"""
@@ -97,6 +98,10 @@ class LiveBroadcastPlugin(ArtisanPlugin):
             if hasattr(main_window.qmc, 'ToggleRecorder'):
                 self.signals.toggle_roasting_signal.connect(main_window.qmc.ToggleRecorder)
                 self.logger.info("Connected toggle_roasting_signal to qmc.startstop")
+            if hasattr(main_window.qmc, 'reset'):
+                self.signals.reset_roast_signal.connect(main_window.qmc.reset)
+                self.logger.info("Connected reset_roast_signal to qmc.reset")
+
             
             
             # Connect to event signals
@@ -566,8 +571,11 @@ class LiveBroadcastPlugin(ArtisanPlugin):
     
     def _broadcast_roast_data(self, data: Dict[str, Any]) -> None:
         """Broadcast roast data to connected clients"""
-        if not self.broadcaster or not self.broadcaster.is_connected():
-            self.logger.debug("Cannot broadcast roast data: broadcaster not connected")
+        # if not self.broadcaster or not self.broadcaster.is_connected():
+        #     self.logger.debug("Cannot broadcast roast data: broadcaster not connected")
+        #     return
+        if not self.broadcaster or not self.broadcaster.is_running():
+            self.logger.debug("Cannot broadcast roast data: broadcaster not running")
             return
             
         try:
@@ -585,8 +593,11 @@ class LiveBroadcastPlugin(ArtisanPlugin):
     
     def _broadcast_roast_event(self, event_type: str) -> None:
         """Broadcast roast lifecycle events"""
-        if not self.broadcaster or not self.broadcaster.is_connected():
-            self.logger.debug(f"Cannot broadcast roast event {event_type}: broadcaster not connected")
+        # if not self.broadcaster or not self.broadcaster.is_connected():
+        #     self.logger.debug(f"Cannot broadcast roast event {event_type}: broadcaster not connected")
+        #     return
+        if not self.broadcaster or not self.broadcaster.is_running():
+            self.logger.debug(f"Cannot broadcast roast event {event_type}: broadcaster not running")
             return
             
         try:
@@ -604,8 +615,11 @@ class LiveBroadcastPlugin(ArtisanPlugin):
     
     def _broadcast_event(self, event_name: str) -> None:
         """Broadcast standard roast events"""
-        if not self.broadcaster or not self.broadcaster.is_connected():
-            self.logger.debug(f"Cannot broadcast event {event_name}: broadcaster not connected")
+        # if not self.broadcaster or not self.broadcaster.is_connected():
+        #     self.logger.debug(f"Cannot broadcast event {event_name}: broadcaster not connected")
+        #     return
+        if not self.broadcaster or not self.broadcaster.is_running():
+            self.logger.debug(f"Cannot broadcast event {event_name}: broadcaster not running")
             return
             
         try:
@@ -627,8 +641,11 @@ class LiveBroadcastPlugin(ArtisanPlugin):
     
     def _broadcast_custom_event(self, event_data: Dict[str, Any]) -> None:
         """Broadcast custom events"""
-        if not self.broadcaster or not self.broadcaster.is_connected():
-            self.logger.debug("Cannot broadcast custom event: broadcaster not connected")
+        # if not self.broadcaster or not self.broadcaster.is_connected():
+        #     self.logger.debug("Cannot broadcast custom event: broadcaster not connected")
+        #     return
+        if not self.broadcaster or not self.broadcaster.is_running():
+            self.logger.debug("Cannot broadcast custom event: broadcaster not running")
             return
             
         try:
@@ -834,6 +851,9 @@ class LiveBroadcastPlugin(ArtisanPlugin):
             elif command == "toggle_roasting":
                 self.logger.info("Received command to toggle roasting state (START/DROP).")
                 self.signals.toggle_roasting_signal.emit(False)
+            elif command == "reset": 
+                self.logger.info("Received command to reset roast.")
+                self.signals.reset_roast_signal.emit()
             else:
                 self.logger.warning(f"Unknown roast_control command: {command}")
 
