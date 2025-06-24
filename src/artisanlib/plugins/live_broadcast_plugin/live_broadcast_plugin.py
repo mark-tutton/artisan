@@ -16,6 +16,7 @@ except ImportError:
 
 from ..base import ArtisanPlugin
 from .config import LiveBroadcastConfig
+from artisanlib.notifications import NotificationType
 
 try:
     from .websocket_client import WebSocketBroadcaster, WEBSOCKETS_AVAILABLE
@@ -31,7 +32,7 @@ class LiveBroadcastSignals(QObject):
     mark_event_signal = pyqtSignal(str, bool)
     toggle_monitoring_signal = pyqtSignal(bool)
     toggle_roasting_signal = pyqtSignal(bool)
-    reset_roast_signal = pyqtSignal(bool)
+    reset_roast_signal = pyqtSignal()
 
 class LiveBroadcastPlugin(ArtisanPlugin):
     """Plugin for broadcasting live roast data and events to external servers"""
@@ -136,6 +137,35 @@ class LiveBroadcastPlugin(ArtisanPlugin):
                 self.update_timer.timeout.connect(self._check_roast_state)
                 self.update_timer.start(1000)  # Check every second
                 self.logger.info("Started roast state monitoring timer")
+
+                # monitoring data timer - broadcasts sensor data even when not roasting
+                try:
+                    self.monitoring_timer = QTimer()
+                    self.monitoring_timer.timeout.connect(self._broadcast_monitoring_data)
+                    self.monitoring_timer.start(1000)  # every 2 secs
+                    _log.info("Started monitoring data broadcast timer")
+                except Exception as e:
+                    self.logger.error(f"Error starting monitoring timer: {e}")
+
+            # Connect to roast data signals
+            if hasattr(main_window, 'qmc'):
+                self.logger.info("Found qmc object, connecting to signals...")
+                
+                # Connect to temperature update signals
+                if hasattr(main_window.qmc, 'updategraphicsSignal'):
+                    main_window.qmc.updategraphicsSignal.connect(self._on_data_update)
+                    self.logger.info("Connected to updategraphicsSignal")
+                
+                # device-specific update signals (deviceUpdateSignal, sensorUpdateSignal)
+                if hasattr(main_window.qmc, 'device'):
+                    if hasattr(main_window.qmc, 'deviceUpdateSignal'):
+                        main_window.qmc.deviceUpdateSignal.connect(self._on_device_update)
+                        self.logger.info("Connected to deviceUpdateSignal")
+                    
+                    if hasattr(main_window.qmc, 'sensorUpdateSignal'):
+                        main_window.qmc.sensorUpdateSignal.connect(self._on_sensor_update)
+                        self.logger.info("Connected to sensorUpdateSignal")
+                
         else:
             self.logger.error("qmc object not found on main_window")
         
@@ -421,6 +451,9 @@ class LiveBroadcastPlugin(ArtisanPlugin):
         # Get current temperatures
         current_et = self._safe_get_temp(qmc.temp1)
         current_bt = self._safe_get_temp(qmc.temp2)
+
+        # Get extra temperature sensors
+        extra_temperatures = self._get_extra_temperatures(qmc)
         
         # Get event times
         charge_time = self._safe_get_timeindex(qmc, 0)
@@ -474,6 +507,9 @@ class LiveBroadcastPlugin(ArtisanPlugin):
             except (IndexError, ZeroDivisionError):
                 pass
         
+        # Get monitoring state
+        monitoring_state = self._get_monitoring_state(qmc)
+        
         return {
             'type': 'roast_data',
 
@@ -523,6 +559,9 @@ class LiveBroadcastPlugin(ArtisanPlugin):
                 'bt': ror_bt
             },
 
+            # Roast Info - Extra Temp Sensors
+            'extra_temperatures': extra_temperatures,
+
             ## Roast Info - Events
             'events': {
                 'charge': {
@@ -566,15 +605,228 @@ class LiveBroadcastPlugin(ArtisanPlugin):
             'roast_state': {
                 'is_roasting': qmc.flagstart,
                 'is_monitoring': qmc.flagon
-            }
+            },
+
+            # Monitoring Info
+            'monitoring_state': monitoring_state
         }
+    
+    def _get_extra_temperatures(self, qmc) -> Dict[str, Any]:
+        """Extract extra temperature sensor data"""
+        extra_temps = {
+            'sensors': [],
+            'total_sensors': 0
+        }
+        
+        try:
+            # Get extra temperature 1 sensors
+            if hasattr(qmc, 'extratemp1') and hasattr(qmc, 'extraname1'):
+                for i, temp_list in enumerate(qmc.extratemp1):
+                    if temp_list and len(temp_list) > 0:
+                        sensor_name = qmc.extraname1[i] if i < len(qmc.extraname1) else f"Extra1_{i}"
+                        current_temp = self._safe_get_temp(temp_list)
+                        extra_temps['sensors'].append({
+                            'name': sensor_name,
+                            'type': 'extra1',
+                            'index': i,
+                            'temperature': current_temp,
+                            'unit': '°F'
+                        })
+            
+            # Get extra temperature 2 sensors
+            if hasattr(qmc, 'extratemp2') and hasattr(qmc, 'extraname2'):
+                for i, temp_list in enumerate(qmc.extratemp2):
+                    if temp_list and len(temp_list) > 0:
+                        sensor_name = qmc.extraname2[i] if i < len(qmc.extraname2) else f"Extra2_{i}"
+                        current_temp = self._safe_get_temp(temp_list)
+                        extra_temps['sensors'].append({
+                            'name': sensor_name,
+                            'type': 'extra2',
+                            'index': i,
+                            'temperature': current_temp,
+                            'unit': '°F'
+                        })
+            
+            extra_temps['total_sensors'] = len(extra_temps['sensors'])
+            
+        except Exception as e:
+            self.logger.error(f"Error getting extra temperatures: {e}")
+        
+        return extra_temps
+    
+    
+    def _get_monitoring_state(self, qmc) -> Dict[str, Any]:
+        """Extract comprehensive monitoring state information"""
+        monitoring_state = {
+            'system_status': {},
+            'device_status': {},
+            'sensor_status': {},
+            'sensor_values': {},
+            'flags': {},
+            'connection_status': {}
+        }
+        
+        try:
+            # Get current sensor readings from real-time values
+            et_temp = getattr(qmc, 'RTtemp1', None)
+            bt_temp = getattr(qmc, 'RTtemp2', None)
+            
+            et_active = et_temp is not None and et_temp != 0.0
+            bt_active = bt_temp is not None and bt_temp != 0.0
+            
+            self.logger.info(f"RTtemp1 (ET): {et_temp}, RTtemp2 (BT): {bt_temp}")
+            self.logger.info(f"ET active: {et_active}, BT active: {bt_active}")
+            
+            # System status
+            monitoring_state['system_status'] = {
+                'is_monitoring': getattr(qmc, 'flagon', False),
+                'is_roasting': getattr(qmc, 'flagstart', False),
+                'is_sampling': getattr(qmc, 'flagsampling', False),
+                'is_sampling_thread_running': getattr(qmc, 'flagsamplingthreadrunning', False),
+                'is_keep_on': getattr(qmc, 'flagKeepON', False),
+                'is_open_completed': getattr(qmc, 'flagOpenCompleted', False),
+                'uptime': self._safe_get_uptime(qmc)
+            }
+            
+            # Device status
+            monitoring_state['device_status'] = {
+                'device_type': getattr(qmc, 'device', None),
+                'device_logging': getattr(qmc, 'device_logging', False),
+                'device_log_file': getattr(qmc, 'device_log_file_name', None),
+                'phidget_manager_active': hasattr(qmc, 'phidgetManager') and qmc.phidgetManager is not None,
+                'yocto_remote_flag': getattr(qmc, 'yoctoRemoteFlag', False),
+                'phidget_remote_flag': getattr(qmc, 'phidgetRemoteFlag', False)
+            }
+            
+            # Sensor status
+            monitoring_state['sensor_status'] = {
+                'et_sensor_active': et_active,
+                'bt_sensor_active': bt_active,
+                'extra_sensors_count': len(qmc.extratemp1) + len(qmc.extratemp2) if hasattr(qmc, 'extratemp1') and hasattr(qmc, 'extratemp2') else 0,
+                'ambient_sensor_active': getattr(qmc, 'ambientTemp', None) is not None,
+                'pressure_sensor_active': getattr(qmc, 'ambient_pressure', None) is not None,
+                'humidity_sensor_active': getattr(qmc, 'ambient_humidity', None) is not None
+            }
+            
+            # Sensor values 
+            monitoring_state['sensor_values'] = {
+                'et_temperature': et_temp,
+                'bt_temperature': bt_temp,
+                'ambient_temperature': getattr(qmc, 'ambientTemp', None),
+                'ambient_pressure': getattr(qmc, 'ambient_pressure', None),
+                'ambient_humidity': getattr(qmc, 'ambient_humidity', None),
+                'extra_sensors': self._get_extra_sensor_values(qmc)
+            }
+            
+            # Event flags
+            monitoring_state['flags'] = {
+                'auto_charge_enabled': getattr(qmc, 'autoCHARGEenabled', False),
+                'auto_dry_enabled': getattr(qmc, 'autoDRYenabled', False),
+                'auto_fc_enabled': getattr(qmc, 'autoFCsenabled', False),
+                'auto_drop_enabled': getattr(qmc, 'autoDROPenabled', False),
+                'charge_timer_flag': getattr(qmc, 'chargeTimerFlag', False),
+                'auto_charge_flag': getattr(qmc, 'autoChargeFlag', False),
+                'auto_drop_flag': getattr(qmc, 'autoDropFlag', False),
+                'mark_tp_flag': getattr(qmc, 'markTPflag', False),
+                'auto_dry_flag': getattr(qmc, 'autoDRYflag', False),
+                'auto_fcs_flag': getattr(qmc, 'autoFCsFlag', False),
+                'delta_et_flag': getattr(qmc, 'DeltaETflag', False),
+                'delta_bt_flag': getattr(qmc, 'DeltaBTflag', False),
+                'pid_button_flag': getattr(qmc, 'PIDbuttonflag', False),
+                'control_button_flag': getattr(qmc, 'Controlbuttonflag', False)
+            }
+            
+            # Connection status
+            monitoring_state['connection_status'] = {
+                'phidget_devices_connected': len(getattr(qmc, 'phidgetDevices', [])) if hasattr(qmc, 'phidgetDevices') else 0,
+                'non_serial_devices_connected': len(getattr(qmc, 'nonSerialDevices', [])) if hasattr(qmc, 'nonSerialDevices') else 0,
+                'non_temp_devices_connected': len(getattr(qmc, 'nonTempDevices', [])) if hasattr(qmc, 'nonTempDevices') else 0,
+                'special_devices_connected': len(getattr(qmc, 'specialDevices', [])) if hasattr(qmc, 'specialDevices') else 0,
+                'binary_devices_connected': len(getattr(qmc, 'binaryDevices', [])) if hasattr(qmc, 'binaryDevices') else 0,
+                'extra_devices_connected': len(getattr(qmc, 'extradevices', [])) if hasattr(qmc, 'extradevices') else 0
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Error getting monitoring state: {e}")
+        
+        return monitoring_state
+    
+    def _get_extra_sensor_values(self, qmc) -> Dict[str, Any]:
+        """Get current values from extra sensors"""
+        sensor_values = {
+            'extra1_sensors': {},
+            'extra2_sensors': {},
+            'all_sensors': {}
+        }
+        
+        try:
+            # Get extra temperature 1 sensors
+            if hasattr(qmc, 'extratemp1') and hasattr(qmc, 'extraname1'):
+                for i, temp_list in enumerate(qmc.extratemp1):
+                    if temp_list and len(temp_list) > 0:
+                        sensor_name = qmc.extraname1[i] if i < len(qmc.extraname1) else f"Extra1_{i}"
+                        current_temp = self._safe_get_temp(temp_list)
+                        
+                        sensor_values['extra1_sensors'][f"sensor_{i}"] = {
+                            'name': sensor_name,
+                            'temperature': current_temp,
+                            'unit': '°F'
+                        }
+                        
+                        sensor_values['all_sensors'][sensor_name] = {
+                            'type': 'extra1',
+                            'index': i,
+                            'temperature': current_temp,
+                            'unit': '°F'
+                        }
+            
+            # Get extra temperature 2 sensors
+            if hasattr(qmc, 'extratemp2') and hasattr(qmc, 'extraname2'):
+                for i, temp_list in enumerate(qmc.extratemp2):
+                    if temp_list and len(temp_list) > 0:
+                        sensor_name = qmc.extraname2[i] if i < len(qmc.extraname2) else f"Extra2_{i}"
+                        current_temp = self._safe_get_temp(temp_list)
+                        
+                        sensor_values['extra2_sensors'][f"sensor_{i}"] = {
+                            'name': sensor_name,
+                            'temperature': current_temp,
+                            'unit': '°F'
+                        }
+                        
+                        sensor_values['all_sensors'][sensor_name] = {
+                            'type': 'extra2',
+                            'index': i,
+                            'temperature': current_temp,
+                            'unit': '°F'
+                        }
+            
+        except Exception as e:
+            self.logger.error(f"Error getting extra sensor values: {e}")
+        
+        return sensor_values
+    
+    def _safe_get_uptime(self, qmc) -> float:
+        """Safely get uptime value"""
+        try:
+            if hasattr(qmc, 'timeclock'):
+                timeclock = qmc.timeclock
+                if hasattr(timeclock, 'total_seconds'):
+                    return timeclock.total_seconds()
+                elif isinstance(timeclock, (int, float)):
+                    return float(timeclock)
+                else:
+                    return float(timeclock) if timeclock else 0.0
+            else:
+                return 0.0
+        except (ValueError, TypeError, AttributeError):
+            return 0.0
     
     def _broadcast_roast_data(self, data: Dict[str, Any]) -> None:
         """Broadcast roast data to connected clients"""
         # if not self.broadcaster or not self.broadcaster.is_connected():
         #     self.logger.debug("Cannot broadcast roast data: broadcaster not connected")
         #     return
-        if not self.broadcaster or not self.broadcaster.is_running():
+        if not self.broadcaster or not self.broadcaster.is_running:
             self.logger.debug("Cannot broadcast roast data: broadcaster not running")
             return
             
@@ -591,12 +843,64 @@ class LiveBroadcastPlugin(ArtisanPlugin):
         except Exception as e:
             self.logger.error(f"Error broadcasting roast data: {e}")
     
+    def _broadcast_monitoring_data(self) -> None:
+        """Broadcast monitoring state data independently of roast data"""
+        try:
+            if not WEBSOCKETS_AVAILABLE or not self.broadcaster or not self.broadcaster.is_running:
+                return
+                
+            if not self.main_window or not hasattr(self.main_window, 'qmc'):
+                return
+                
+            qmc = self.main_window.qmc
+            
+            # Only broadcast if monitoring is active
+            if not getattr(qmc, 'flagon', False):
+                self.logger.info("Monitoring is not active, skipping broadcast")
+                return
+            
+            self.logger.info("Broadcasting monitoring data")
+
+            self.logger.info(f"temp1 exists: {hasattr(qmc, 'temp1')}, temp1 length: {len(qmc.temp1) if hasattr(qmc, 'temp1') else 'N/A'}")
+            self.logger.info(f"temp2 exists: {hasattr(qmc, 'temp2')}, temp2 length: {len(qmc.temp2) if hasattr(qmc, 'temp2') else 'N/A'}")
+            
+            et_active = hasattr(qmc, 'temp1') and qmc.temp1 and len(qmc.temp1) > 0
+            bt_active = hasattr(qmc, 'temp2') and qmc.temp2 and len(qmc.temp2) > 0
+            
+            # Get current temp values
+            et_temp = self._safe_get_temp(qmc.temp1) if et_active else None
+            bt_temp = self._safe_get_temp(qmc.temp2) if bt_active else None
+            
+            self.logger.info(f"ET active: {et_active}, ET temp: {et_temp}")
+            self.logger.info(f"BT active: {bt_active}, BT temp: {bt_temp}")
+            
+            # Get monitoring state
+            try:
+                monitoring_state = self._get_monitoring_state(qmc)
+            except Exception as e:
+                self.logger.error(f"Error getting monitoring state: {e}")
+                return
+            
+            message = {
+                'type': 'monitoring_data',
+                'data': {
+                    'monitoring_state': monitoring_state,
+                    'timestamp': time.time()
+                }
+            }
+            
+            self.broadcaster.broadcast(json.dumps(message))
+            self.logger.debug("Broadcasted monitoring data")
+            
+        except Exception as e:
+            self.logger.error(f"Error in _broadcast_monitoring_data: {e}")
+
     def _broadcast_roast_event(self, event_type: str) -> None:
         """Broadcast roast lifecycle events"""
         # if not self.broadcaster or not self.broadcaster.is_connected():
         #     self.logger.debug(f"Cannot broadcast roast event {event_type}: broadcaster not connected")
         #     return
-        if not self.broadcaster or not self.broadcaster.is_running():
+        if not self.broadcaster or not self.broadcaster.is_running:
             self.logger.debug(f"Cannot broadcast roast event {event_type}: broadcaster not running")
             return
             
@@ -618,7 +922,7 @@ class LiveBroadcastPlugin(ArtisanPlugin):
         # if not self.broadcaster or not self.broadcaster.is_connected():
         #     self.logger.debug(f"Cannot broadcast event {event_name}: broadcaster not connected")
         #     return
-        if not self.broadcaster or not self.broadcaster.is_running():
+        if not self.broadcaster or not self.broadcaster.is_running:
             self.logger.debug(f"Cannot broadcast event {event_name}: broadcaster not running")
             return
             
@@ -644,7 +948,7 @@ class LiveBroadcastPlugin(ArtisanPlugin):
         # if not self.broadcaster or not self.broadcaster.is_connected():
         #     self.logger.debug("Cannot broadcast custom event: broadcaster not connected")
         #     return
-        if not self.broadcaster or not self.broadcaster.is_running():
+        if not self.broadcaster or not self.broadcaster.is_running:
             self.logger.debug("Cannot broadcast custom event: broadcaster not running")
             return
             
@@ -769,6 +1073,22 @@ class LiveBroadcastPlugin(ArtisanPlugin):
         if hasattr(self, 'status_action'):
             self.status_action.setText(f"Status: {status}")
         self.logger.info(f"Broadcaster status: {status}")
+
+        if hasattr(self.main_window, 'notifications'): #TODO: redo this
+            title = "Live Broadcast"
+            message = None
+            
+            if status.lower() == 'connected':
+                message = "Successfully connected to the broadcast server."
+            elif status.lower() == 'disconnected':
+                message = "Disconnected from the broadcast server."
+
+            if message:
+                self.main_window.notifications.sendNotificationMessage(
+                    title,
+                    message,
+                    NotificationType.ARTISAN_SYSTEM
+                )
     
     def _test_event_broadcast(self) -> None:
         """Test event broadcasting"""
@@ -949,6 +1269,18 @@ class LiveBroadcastPlugin(ArtisanPlugin):
         else:
             self.logger.warning(f"Unknown or unmapped event: {event_name}")
 
+    def _on_device_update(self) -> None:
+        """Handle device updates (including sensor readings)"""
+        _log.info("Device update received")
+        if WEBSOCKETS_AVAILABLE:
+            self._broadcast_monitoring_data()
+    
+    def _on_sensor_update(self) -> None:
+        """Handle sensor updates"""
+        _log.info("Sensor update received")
+        if WEBSOCKETS_AVAILABLE:
+            self._broadcast_monitoring_data()
+
     def cleanup(self) -> None:
         """Cleanup when plugin is disabled/unloaded"""
         if self.broadcaster:
@@ -956,5 +1288,8 @@ class LiveBroadcastPlugin(ArtisanPlugin):
         
         if self.update_timer:
             self.update_timer.stop()
+
+        if hasattr(self, 'monitoring_timer'):
+            self.monitoring_timer.stop()
         
         super().cleanup()

@@ -169,67 +169,6 @@ class WebSocketBroadcaster(QObject):
 
             self._loop.close()
     
-    # async def _connect_and_run(self) -> None:
-    #     """Connect to WebSocket server and handle messages"""
-    #     while self.is_running:
-    #         try:
-    #             async with websockets.connect(self.url) as websocket:
-    #                 self.websocket = websocket
-    #                 self._is_connected = True 
-    #                 self.reconnect_attempts = 0  # Reset on successful connection
-                    
-    #                 # Queue connected signal
-    #                 self._queue_signal('connected')
-                    
-    #                 # Notify connection handlers
-    #                 for handler in self._connection_handlers:
-    #                     try:
-    #                         handler()
-    #                     except Exception as e:
-    #                         _log.error(f"Connection handler error: {e}")
-                    
-                    
-    #                 _log.info(f"Connected to WebSocket server at {self.url}")
-
-
-    #                 # Send identification message to the server
-    #                 await websocket.send(json.dumps({
-    #                     "type": "artisan_client_identification"
-    #                 }))
-    #                 _log.info("Sent identification to server.")
-
-                    
-    #                 # Handle incoming messages
-    #                 async for message in websocket:
-    #                     await self._handle_message(message)
-                        
-    #         except Exception as e:
-    #             self._is_connected = False  
-    #             self.websocket = None
-    #             self.reconnect_attempts += 1
-                
-    #             # Queue disconnected signal
-    #             self._queue_signal('disconnected')
-                
-    #             # Notify disconnection handlers
-    #             for handler in self._disconnection_handlers:
-    #                 try:
-    #                     handler()
-    #                 except Exception as handler_error:
-    #                     _log.error(f"Disconnection handler error: {handler_error}")
-                
-    #             _log.error(f"WebSocket connection error: {e}")
-                
-    #             # Check if we should stop trying to reconnect
-    #             if self.max_reconnect_attempts > 0 and self.reconnect_attempts >= self.max_reconnect_attempts:
-    #                 _log.error(f"Max reconnection attempts ({self.max_reconnect_attempts}) reached. Stopping.")
-    #                 self._queue_signal('error', f"Max reconnection attempts ({self.max_reconnect_attempts}) reached")
-    #                 self.is_running = False
-    #                 break
-                
-    #             # Wait before reconnecting
-    #             if self.is_running:
-    #                 await asyncio.sleep(self.reconnect_interval)
     
     async def _connect_and_run(self) -> None:
         """Connect to WebSocket server and handle messages"""
