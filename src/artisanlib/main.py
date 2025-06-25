@@ -1565,7 +1565,7 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
         'bbp_begin_to_bottom_ror', 'bbp_bottom_to_charge_ror', 'bbp_time_added_from_prev', 'bbp_begin', 'bbp_endroast_epoch_msec', 'bbp_endevents',
         'bbp_dropevents', 'bbp_dropbt', 'bbp_dropet', 'bbp_drop_to_end', 'schedule_day_filter', 'schedule_user_filter', 'schedule_machine_filter',
         'schedule_visible_filter', 'scheduler_tasks_visible', 'scheduler_completed_details_visible', 'scheduler_filters_visible', 'scheduler_auto_open',
-        'plugin_manager', 'rest_config', 'rest_plugin', 'live_broadcast_config', 'live_broadcast_plugin']
+        'plugin_manager', 'live_broadcast_config', 'live_broadcast_plugin']
 
 
     def __init__(self, parent:Optional[QWidget] = None, *, locale:str, WebEngineSupport:bool, artisanviewerFirstStart:bool) -> None:
@@ -4363,20 +4363,16 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
 
     def initialize_plugins(self):
         """Initialize and register plugins"""
-        from artisanlib.plugins.rest_plugin import RESTPlugin
         from artisanlib.plugins.live_broadcast_plugin import LiveBroadcastPlugin
         from artisanlib.plugins.inventory_fetcher import InventoryFetcherPlugin
-        # from artisanlib.plugins.websocket_plugin import WebSocketPlugin
-        # from artisanlib.plugins.erp_plugin import ERPPlugin
+
         
         # Register plugins
-        self.plugin_manager.register_plugin(RESTPlugin)
         self.plugin_manager.register_plugin(LiveBroadcastPlugin)
         self.plugin_manager.register_plugin(InventoryFetcherPlugin)
         self.inventory_fetcher_plugin = InventoryFetcherPlugin()
         self.inventory_fetcher_plugin.initialize(self)
-        # self.plugin_manager.register_plugin(WebSocketPlugin)
-        # self.plugin_manager.register_plugin(ERPPlugin)
+
         
 
     # today is expected to be w.r.t. local timezone
