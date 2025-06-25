@@ -492,20 +492,37 @@ class LiveBroadcastPlugin(ArtisanPlugin):
         if charge_time is not None and len(qmc.timex) > 0:
             time_since_charge = qmc.timex[-1] - charge_time
         
-        # Calculate rate of rise
-        ror_et = None
-        ror_bt = None
-        if len(qmc.temp1) > 1 and len(qmc.timex) > 1:
-            try:
-                ror_et = (qmc.temp1[-1] - qmc.temp1[-2]) / (qmc.timex[-1] - qmc.timex[-2]) * 60  # °C/min
-            except (IndexError, ZeroDivisionError):
-                pass
+        # # Calculate rate of rise
+        # ror_et = None
+        # ror_bt = None
+        # if len(qmc.temp1) > 1 and len(qmc.timex) > 1:
+        #     try:
+        #         ror_et = (qmc.temp1[-1] - qmc.temp1[-2]) / (qmc.timex[-1] - qmc.timex[-2]) * 60  # °C/min
+        #     except (IndexError, ZeroDivisionError):
+        #         pass
                 
-        if len(qmc.temp2) > 1 and len(qmc.timex) > 1:
+        # if len(qmc.temp2) > 1 and len(qmc.timex) > 1:
+        #     try:
+        #         ror_bt = (qmc.temp2[-1] - qmc.temp2[-2]) / (qmc.timex[-1] - qmc.timex[-2]) * 60  # °C/min
+        #     except (IndexError, ZeroDivisionError):
+        #         pass
+
+        # ROR
+        ror_et = getattr(qmc, 'rateofchange1', None)
+        ror_bt = getattr(qmc, 'rateofchange2', None)
+
+        # Fallback to manual calc
+        if ror_et is None and len(qmc.temp1) >= 2 and len(qmc.timex) >= 2:
             try:
-                ror_bt = (qmc.temp2[-1] - qmc.temp2[-2]) / (qmc.timex[-1] - qmc.timex[-2]) * 60  # °C/min
+                ror_et = (qmc.temp1[-1] - qmc.temp1[-2]) / (qmc.timex[-1] - qmc.timex[-2]) * 60
             except (IndexError, ZeroDivisionError):
-                pass
+                ror_et = None
+
+        if ror_bt is None and len(qmc.temp2) >= 2 and len(qmc.timex) >= 2:
+            try:
+                ror_bt = (qmc.temp2[-1] - qmc.temp2[-2]) / (qmc.timex[-1] - qmc.timex[-2]) * 60
+            except (IndexError, ZeroDivisionError):
+                ror_bt = None
         
         # Get monitoring state
         monitoring_state = self._get_monitoring_state(qmc)
