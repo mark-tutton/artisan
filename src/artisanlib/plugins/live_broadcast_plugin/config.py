@@ -34,6 +34,10 @@ class LiveBroadcastConfig:
     broadcast_temperature_data: bool = True
     broadcast_rate_of_rise: bool = True
 
+    min_send_interval: float = 0.03  
+    connection_timeout: float = 5.0   
+    max_reconnect_interval: float = 60.0  
+    
     # Broadcast intervals based on roaster state
     broadcast_idle_interval: float = 30.0 
     broadcast_monitoring_interval: float = 10.0 
@@ -124,6 +128,19 @@ class LiveBroadcastConfig:
                 or self.heartbeat_interval <= 0
             ):
                 raise ValueError("heartbeat_interval must be a positive number")
+            
+            if not isinstance(self.min_send_interval, (int, float)) or self.min_send_interval <= 0:
+                raise ValueError("min_send_interval must be a positive number")
+                
+            if not isinstance(self.connection_timeout, (int, float)) or self.connection_timeout <= 0:
+                raise ValueError("connection_timeout must be a positive number")
+                
+            if not isinstance(self.max_reconnect_interval, (int, float)) or self.max_reconnect_interval <= 0:
+                raise ValueError("max_reconnect_interval must be a positive number")
+                
+            if not isinstance(self.max_reconnect_interval, (int, float)) or self.max_reconnect_interval < self.reconnect_interval:
+                raise ValueError("max_reconnect_interval must be >= reconnect_interval")
+
 
         except Exception as e:
             _log.error(f"Configuration validation failed: {e}")
@@ -222,6 +239,19 @@ class LiveBroadcastConfig:
                 return isinstance(value, int) and value > 0
             elif field_name == "heartbeat_interval":
                 return isinstance(value, (int, float)) and value > 0
+            elif field_name == "min_send_interval":
+                return isinstance(value, (int, float)) and value > 0
+            elif field_name == "connection_timeout":
+                return isinstance(value, (int, float)) and value > 0
+            elif field_name == "max_reconnect_interval":
+                return isinstance(value, (int, float)) and value > 0
+            elif field_name == "max_messages_per_minute":
+                return isinstance(value, int) and value > 0
+            elif field_name == "enable_rate_limiting":
+                return isinstance(value, bool)
+            elif field_name == "batch_messages":
+                return isinstance(value, bool)
+                
             elif field_name in [
                 "auto_start",
                 "headless_mode",

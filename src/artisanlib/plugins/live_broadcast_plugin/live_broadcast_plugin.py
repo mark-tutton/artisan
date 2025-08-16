@@ -18,7 +18,7 @@ except ImportError:
     from PyQt5.QtGui import QAction
     from PyQt5.QtCore import QTimer, pyqtSignal, QObject
 
-from ..base import PluginBase
+from ..base import PluginBase, PluginState
 from .config import LiveBroadcastConfig
 from artisanlib.notifications import NotificationType
 
@@ -89,6 +89,9 @@ class LiveBroadcastPlugin(PluginBase):
         self.config = LiveBroadcastConfig()
         self.broadcaster: Optional[WebSocketBroadcaster] = None
 
+        self._last_broadcast_time: float = 0
+        self._current_interval: float = self.config.broadcast_idle_interval
+
         # Timers
         self.update_timer: Optional[QTimer] = None
         self.monitoring_timer: Optional[QTimer] = None
@@ -125,8 +128,110 @@ class LiveBroadcastPlugin(PluginBase):
         # Headless mode detection
         self.headless_mode = False
 
+    def initialize(self, main_window: QMainWindow) -> bool:
+        """Required abstract method from PluginBase"""
+        try:
+            self._change_state(PluginState.INITIALIZING)
+            self.main_window = main_window
+
+            # Call your existing initialization
+            self._initialize_plugin()
+
+            self._change_state(PluginState.ACTIVE)
+            self.initialization_time = datetime.now()
+            self.logger.info("Live Broadcast Plugin initialized successfully")
+            return True
+
+        except Exception as e:
+            self._change_state(PluginState.ERROR)
+            self._record_error("initialization", str(e))
+            self.logger.error(f"Failed to initialize plugin: {e}")
+            return False
+
+    def start(self) -> bool:
+        try:
+            if self.state != PluginState.ACTIVE:
+                self.logger.warning("Plugin not in active state, cannot start")
+                return False
+
+            if self.config.auto_start and not self.broadcaster:
+                self._initialize_broadcaster()
+
+            if self.broadcaster:
+                success = self.broadcaster.start()
+                if success:
+                    self.logger.info("Live Broadcast Plugin started successfully")
+                    return True
+                else:
+                    self.logger.error("Failed to start broadcaster")
+                    return False
+            else:
+                self.logger.info("Broadcaster not configured, plugin started in passive mode")
+                return True
+
+        except Exception as e:
+            self._record_error("start", str(e))
+            self.logger.error(f"Failed to start plugin: {e}")
+            return False
+
+    def stop(self) -> bool:
+        try:
+            if self.broadcaster:
+                self.broadcaster.stop()
+                self.logger.info("Live Broadcast Plugin stopped")
+
+            # Stop timers
+            if self.update_timer:
+                self.update_timer.stop()
+            if self.monitoring_timer:
+                self.monitoring_timer.stop()
+            if self.health_check_timer:
+                self.health_check_timer.stop()
+
+            return True
+
+        except Exception as e:
+            self._record_error("stop", str(e))
+            self.logger.error(f"Failed to stop plugin: {e}")
+            return False
+
+    def cleanup(self) -> bool:
+        try:
+            self._change_state(PluginState.CLEANING_UP)
+
+            # Stop operations
+            self.stop()
+
+            # Clean up broadcaster
+            if self.broadcaster:
+                self.broadcaster.stop()
+                self.broadcaster = None
+
+            # Disconnect signals
+            self._disconnect_signals()
+
+            self._change_state(PluginState.DISABLED)
+            self.logger.info("Live Broadcast Plugin cleaned up successfully")
+            return True
+
+        except Exception as e:
+            self._record_error("cleanup", str(e))
+            self.logger.error(f"Failed to cleanup plugin: {e}")
+            return False
+
+    def _disconnect_signals(self) -> None:
+        """Disconnect plugin signals"""
+        try:
+            if hasattr(self, "signals"):
+                self.signals.mark_event_signal.disconnect()
+                self.signals.toggle_monitoring_signal.disconnect()
+                self.signals.toggle_roasting_signal.disconnect()
+                self.signals.reset_roast_signal.disconnect()
+        except Exception as e:
+            self.logger.warning(f"Error disconnecting signals: {e}")
+
     def _initialize_plugin(self) -> None:
-        """Initialize the plugin with comprehensive error handling"""
+        """Initialize the plugin """
         try:
             # Check headless mode
             self.headless_mode = getattr(self.config, "headless_mode", False)
@@ -605,7 +710,7 @@ class LiveBroadcastPlugin(PluginBase):
         return None
 
     def _get_current_roast_data(self) -> Optional[Dict[str, Any]]:
-        """Get current roast data with comprehensive error handling"""
+        """Get current roast data """
         try:
             if not hasattr(self.main_window, "qmc"):
                 return None
@@ -941,8 +1046,72 @@ class LiveBroadcastPlugin(PluginBase):
             self._record_error("UptimeError", str(e))
             return 0.0
 
-    def _broadcast_roast_data(self, data: Dict[str, Any]) -> None:
-        """Broadcast roast data"""
+    def _get_broadcast_interval(self) -> float:
+        """Dynamic interval based on roasting state"""
+        try:
+            if not hasattr(self.main_window, "qmc"):
+                return self.config.broadcast_idle_interval
+                
+            qmc = self.main_window.qmc
+            
+            # Check roasting state using qmc attributes
+            if hasattr(qmc, "flagstart") and qmc.flagstart:
+                return self.config.broadcast_roasting_interval
+            elif hasattr(qmc, "flagon") and qmc.flagon:
+                return self.config.broadcast_monitoring_interval
+            else:
+                return self.config.broadcast_idle_interval
+                
+        except Exception as e:
+            self.logger.warning(f"Error getting broadcast interval: {e}")
+            return self.config.broadcast_idle_interval
+
+    def _should_broadcast(self) -> bool:
+        """Smart broadcasting decision"""
+        try:
+            now = time.time()
+            interval = self._get_broadcast_interval()
+            
+            if (now - self._last_broadcast_time) >= interval:
+                self._last_broadcast_time = now
+                return True
+            return False
+            
+        except Exception as e:
+            self.logger.warning(f"Error in broadcast decision: {e}")
+            return False
+
+    # def _broadcast_roast_data(self, data: Dict[str, Any]) -> None:
+    #     """Broadcast roast data"""
+    #     try:
+    #         if not self.broadcaster or not self.broadcaster.is_running:
+    #             return
+
+    #         message = json.dumps(data)
+    #         self.broadcaster.broadcast(message)
+
+    #         # Update metrics
+    #         self.metrics.messages_sent += 1
+    #         self.metrics.bytes_sent += len(message.encode("utf-8"))
+    #         self.metrics.last_send_time = datetime.now()
+
+    #     except Exception as e:
+    #         self._record_error("BroadcastDataError", str(e))
+    #         self.metrics.messages_failed += 1
+    #         self.consecutive_failures += 1
+
+    def _broadcast_roast_data(self, data: Dict[str, Any] = None) -> None:
+            """Rate-limited data broadcasting"""
+            if not self._should_broadcast():
+                return
+                
+            if self.broadcaster and self.broadcaster.is_connected():
+                if data is None:
+                    data = self._get_current_roast_data()
+                self._broadcast_roast_data_impl(data)
+
+    def _broadcast_roast_data_impl(self, data: Dict[str, Any]) -> None:
+        """Implementation of roast data broadcasting"""
         try:
             if not self.broadcaster or not self.broadcaster.is_running:
                 return
@@ -1086,10 +1255,14 @@ class LiveBroadcastPlugin(PluginBase):
             self.broadcaster.add_message_callback(self._on_ws_message)
 
             # Start broadcaster
-            self.broadcaster.start()
-
-            self.metrics.connection_attempts += 1
-            self.logger.info("Broadcaster started successfully")
+            success = self.broadcaster.start()
+            if success:
+                self.metrics.connection_attempts += 1
+                self.logger.info("Broadcaster started successfully")
+            else:
+                self.logger.error("Failed to start broadcaster")
+                self._change_broadcast_state(BroadcastState.ERROR)
+                self.metrics.failed_connections += 1
 
         except Exception as e:
             self._record_error("StartBroadcasterError", str(e))
@@ -1241,7 +1414,7 @@ class LiveBroadcastPlugin(PluginBase):
                 self._record_error("IncomingMessageError", str(e))
 
     def _on_ws_message(self, data):
-        """Handle WebSocket messages with comprehensive error handling"""
+        """Handle WebSocket messages """
         try:
             self.metrics.last_receive_time = datetime.now()
 
@@ -1476,7 +1649,7 @@ class LiveBroadcastPlugin(PluginBase):
             self._record_error("RecoveryError", str(e))
 
     def _cleanup_plugin(self) -> None:
-        """Cleanup the plugin with comprehensive error handling"""
+        """Cleanup the plugin """
         try:
             self.logger.info(f"Cleaning up {self.name}")
 
@@ -1523,7 +1696,6 @@ class LiveBroadcastPlugin(PluginBase):
             self._record_error("CleanupError", str(e))
 
     def get_plugin_status(self) -> Dict[str, Any]:
-        """Get comprehensive plugin status"""
         try:
             base_status = super().get_health_status()
 
@@ -1567,7 +1739,4 @@ class LiveBroadcastPlugin(PluginBase):
         except Exception as e:
             self._record_error("StatusError", str(e))
             return {"error": str(e)}
-
-
 ArtisanPlugin = LiveBroadcastPlugin
-

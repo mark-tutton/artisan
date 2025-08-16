@@ -132,61 +132,91 @@ class WebSocketBroadcaster(QObject):
                 stats["current_uptime"] = time.time() - self._connection_start_time
             return stats
 
-    def start(self) -> None:
+    @staticmethod
+    def start_background_loop(loop: asyncio.AbstractEventLoop) -> None:
+        """Clean event loop management like weblcds"""
+        asyncio.set_event_loop(loop)
+        try:
+            # run_forever() returns after calling loop.stop()
+            loop.run_forever()
+            # clean up tasks
+            for task in asyncio.all_tasks(loop):
+                task.cancel()
+            for t in [t for t in asyncio.all_tasks(loop) if not (t.done() or t.cancelled())]:
+                with suppress(asyncio.CancelledError):
+                    loop.run_until_complete(t)
+        except Exception as e:
+            _log.exception(e)
+        finally:
+            loop.close()
+
+    def start(self) -> bool:
         """Start the WebSocket client"""
         if self.is_running:
             _log.warning("WebSocket broadcaster is already running")
-            return
+            return True
 
         if not WEBSOCKETS_AVAILABLE:
-            raise ImportError(
-                "websockets library is required for live broadcasting. "
-                "Install with: pip install websockets"
-            )
+            _log.error("websockets library is required for live broadcasting")
+            return False
 
-        with self._lock:
-            self.is_running = True
-            self.reconnect_attempts = 0
-            self._stats["connection_attempts"] += 1
+        try:
+            with self._lock:
+                self.is_running = True
+                self.reconnect_attempts = 0
+                self._stats["connection_attempts"] += 1
 
-        self._thread = Thread(target=self._run_loop, daemon=True, name="WebSocketBroadcaster")
-        self._thread.start()
+            self._thread = Thread(target=self._run_loop, daemon=True, name="WebSocketBroadcaster")
+            self._thread.start()
 
-        _log.info(f"Started WebSocket broadcaster to {self.url}")
+            _log.info(f"Started WebSocket broadcaster to {self.url}")
+            return True
 
-    def stop(self) -> None:
+        except Exception as e:
+            _log.error(f"Failed to start WebSocket broadcaster: {e}")
+            with self._lock:
+                self.is_running = False
+            return False
+
+    def stop(self) -> bool:
         """Stop the WebSocket client gracefully"""
         if not self.is_running:
-            return
+            return True
 
-        _log.info("Requesting WebSocket broadcaster to stop...")
+        try:
+            _log.info("Requesting WebSocket broadcaster to stop...")
 
-        with self._lock:
-            self.is_running = False
+            with self._lock:
+                self.is_running = False
 
-        # Signal shutdown
-        if self._loop and self._loop.is_running() and self._shutdown_event:
-            try:
-                self._loop.call_soon_threadsafe(self._shutdown_event.set)
-            except RuntimeError:
-                _log.warning("Event loop not running during shutdown")
+            # Signal shutdown
+            if self._loop and self._loop.is_running() and self._shutdown_event:
+                try:
+                    self._loop.call_soon_threadsafe(self._shutdown_event.set)
+                except RuntimeError:
+                    _log.warning("Event loop not running during shutdown")
 
-        # Wait for thread to finish
-        if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=10)
-            if self._thread.is_alive():
-                _log.warning("WebSocket thread did not stop within timeout")
+            # Wait for thread to finish
+            if self._thread and self._thread.is_alive():
+                self._thread.join(timeout=10)
+                if self._thread.is_alive():
+                    _log.warning("WebSocket thread did not stop within timeout")
 
-        # Clean up
-        self._is_connected = False
-        self.websocket = None
-        self._connection_start_time = None
+            # Clean up
+            self._is_connected = False
+            self.websocket = None
+            self._connection_start_time = None
 
-        # Update stats
-        if self._connection_start_time:
-            self._stats["total_uptime"] += time.time() - self._connection_start_time
+            # Update stats
+            if self._connection_start_time:
+                self._stats["total_uptime"] += time.time() - self._connection_start_time
 
-        _log.info("Stopped WebSocket broadcaster")
+            _log.info("Stopped WebSocket broadcaster")
+            return True
+
+        except Exception as e:
+            _log.error(f"Error stopping WebSocket broadcaster: {e}")
+            return False
 
     def broadcast(self, message: str) -> bool:
         """Broadcast a message to connected clients. Returns True if sent successfully."""
