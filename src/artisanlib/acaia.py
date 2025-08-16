@@ -46,7 +46,6 @@ class SCALE_CLASS(IntEnum):
     MODERN = 2 # eg. Lunar 2021, Pearl, Pearl 2021, Pearl S, Cinco, Pyxis
         # report weight in unit indicated by byte 2 of STATUS_A message
     RELAY = 3  # relaying scales without display eg. Umbra, ..
-        # report weight always in g (big-endian!); byte 2 of STATUS_A message reports auto off timer; stable bit inverted
 
 @unique
 class UNIT(IntEnum):
@@ -237,6 +236,7 @@ class AcaiaBLE(ClientBLE): # pyright: ignore [reportGeneralTypeIssues] # Argumen
         self.firmware:Optional[Tuple[int,int,int]] = None # on connect this is set to a triple of integers, (major, minor, patch)-version
         self.unit:int = UNIT.G
         self.max_weight:int = 0 # always in g
+        self.readability:float = 0 # scale accuracy; minimal weight steps
         self.auto_off_timer:AUTO_OFF_TIMER = AUTO_OFF_TIMER.AUTO_SLEEP_OFF
 
         ###
@@ -267,10 +267,12 @@ class AcaiaBLE(ClientBLE): # pyright: ignore [reportGeneralTypeIssues] # Argumen
 
     def reset_readings(self) -> None:
         self.weight = None
+        self.stable_weight = None
         self.battery = None
         self.firmware = None
         self.unit = UNIT.G
         self.max_weight = 0
+        self.readability = 0
 
 
     def on_connect(self) -> None:
@@ -278,19 +280,63 @@ class AcaiaBLE(ClientBLE): # pyright: ignore [reportGeneralTypeIssues] # Argumen
         self.id_sent = False
         self.fast_notifications_sent = False
         self.slow_notifications_sent = False
-        connected_service_UUID = self.connected()
+        connected_service_UUID, connected_device_name = self.connected()
         if connected_service_UUID == ACAIA_LEGACY_SERVICE_UUID:
-            _log.debug('connected to Acaia Legacy Scale')
+            _log.debug('connected to Acaia Legacy Scale (%s)', connected_device_name)
             self.scale_class = SCALE_CLASS.LEGACY
             self.set_heartbeat(self.HEARTBEAT_FREQUENCY) # enable heartbeat
+
+            if connected_device_name is not None:
+                # Acaia Pearl/Lunar (Legacy)
+                self.max_weight = 2000
+                self.readability = 0.1
+
         elif connected_service_UUID == ACAIA_RELAY_SERVICE_UUID:
-            _log.debug('connected to Acaia Relay Scale')
+            _log.debug('connected to Acaia Relay Scale (%s)', connected_device_name)
             self.scale_class = SCALE_CLASS.RELAY
             self.set_heartbeat(0) # disable heartbeat
+
+            if connected_device_name is not None:
+                if connected_device_name.startswith('UMBRA'):
+                    # Acaia Umbra
+                    self.max_weight = 1000
+                    self.readability = 0.1
+                elif connected_device_name.startswith('COSMO-100'):
+                    # Acaia Cosmo 100kg
+                    self.max_weight = 100*1000
+                    self.readability = 10
+                elif connected_device_name.startswith('COSMO-10'):
+                    self.max_weight = 10*1000
+                    self.readability = 0.1
+                else:
+                    self.max_weight = 1000
+                    self.readability = 0.1
+                self.fast_notifications()
+                self.fast_notifications_sent = False
+
         else: #connected_service_UUID == ACAIA_SERVICE_UUID:
-            _log.debug('connected to Acaia Scale')
+            _log.debug('connected to Acaia Scale (%s)', connected_device_name)
             self.scale_class = SCALE_CLASS.MODERN
-            self.set_heartbeat(0) # disable heartbeat
+            # in principle the heartbeat on those newer scales with newer firmwares is not needed
+            # but it seems to be needed at least on Pearl 2021 as in some cases (1 of 5) the scale stops sending ID events on connect
+            # and thus never gets configured (slow/fast notifications) and thus sends weight messages
+            # to be on the safe side we keep sending the heartbeat for those scales
+            self.set_heartbeat(self.HEARTBEAT_FREQUENCY)
+
+            if connected_device_name is not None:
+                if connected_device_name.startswith(('PYXIS', 'CINCO')):
+                    # Acaia Pearl (2021)
+                    self.max_weight = 500
+                    self.readability = 0.01
+                elif connected_device_name.startswith(('PEARL-', 'LUNAR-')):
+                    # Acaia Pearl (2021)
+                    self.max_weight = 2000
+                    self.readability = 0.1
+                else:
+                    # Acaia Lunar (PEARLS)
+                    self.max_weight = 3000
+                    self.readability = 0.1
+
         if self._connected_handler is not None:
             self._connected_handler()
         self.connected_signal.emit()
@@ -315,7 +361,7 @@ class AcaiaBLE(ClientBLE): # pyright: ignore [reportGeneralTypeIssues] # Argumen
     def decode_weight(self, payload:bytes) -> Tuple[Optional[float], bool]:
         try:
             #big_endian = (payload[5] & 0x08) == 0x08 # bit 3 of byte 5 is set if weight is in big endian
-            big_endian = self.scale_class == SCALE_CLASS.RELAY
+            big_endian = False # self.scale_class == SCALE_CLASS.RELAY
 
             value:float = 0
             if big_endian:
@@ -348,10 +394,10 @@ class AcaiaBLE(ClientBLE): # pyright: ignore [reportGeneralTypeIssues] # Argumen
                 elif self.unit == UNIT.OZ:
                     value = value * 28.3495 # scale set to oz displays 4 decimals
 
-            if self.scale_class == SCALE_CLASS.RELAY:
-                stable = (payload[5] & 0x01) == 0x01
-            else:
-                stable = (payload[5] & 0x01) != 0x01
+#            if big_endian:
+#                stable = (payload[5] & 0x01) == 0x01
+#            else:
+            stable = (payload[5] & 0x01) != 0x01
 
             # if 2nd bit of payload[5] is set, the reading is negative
             if (payload[5] & 0x02) == 0x02:
@@ -361,8 +407,9 @@ class AcaiaBLE(ClientBLE): # pyright: ignore [reportGeneralTypeIssues] # Argumen
             return None, False
 
     def update_weight(self, value:Optional[float], stable:Optional[bool] = False) -> None:
+#        _log.debug('PRINT update_weight(%s,%s)', value, stable)
         if value is not None and (not self.stable_only or stable):
-            # convert the weight in g delivered with one decimals to an int
+            # convert the weight in g delivered with one decimal to an int
             value_rounded:float = float2float(value, self.decimals)
             if stable and value_rounded != self.stable_weight:
                 # if value is fresh and reading is stable (if self.stable_only is set)
@@ -371,6 +418,7 @@ class AcaiaBLE(ClientBLE): # pyright: ignore [reportGeneralTypeIssues] # Argumen
 #                _log.debug('PRINT new stable weight: %s', self.stable_weight)
                 self.weight_changed_signal.emit(self.stable_weight, stable)
             elif not stable and value_rounded != self.weight:
+                self.stable_weight = None # non-stable weights invalidate the last stable weight to ensure a sequence of equal stable weights is reported if interleaved with non-stable weights
                 self.weight = value_rounded
 #                _log.debug('PRINT new weight: %s', self.weight)
                 self.weight_changed_signal.emit(self.weight, stable)
@@ -632,13 +680,15 @@ class AcaiaBLE(ClientBLE): # pyright: ignore [reportGeneralTypeIssues] # Argumen
         try:
             if msg_type == CMD.INFO_A:
                 self.parse_info(data)
-                self.send_ID() # send also after very INFO_A as handshake confirmation
+                self.send_ID() # send after very INFO_A as handshake confirmation
             elif msg_type == CMD.STATUS_A:
                 self.parse_status(data)
             elif msg_type == CMD.EVENT_SA:
                 self.parse_scale_events(data)
             #
-            if self.id_sent and not self.fast_notifications_sent:
+            if self.id_sent and (not self.fast_notifications_sent or not self.slow_notifications_sent):
+                # NOTE: in some cases previously send fast_notifications are ignore so we have to repeat sending them until we received some initial weight data
+                #   (until self.slow_notifications_sent is set)
                 # we configure the scale to receive the initial
                 # weight notification as fast as possible
                 # Note: this event is needed to have the connected scale start to send weight messages even on relay scales which ignore the settings
@@ -695,11 +745,13 @@ class AcaiaBLE(ClientBLE): # pyright: ignore [reportGeneralTypeIssues] # Argumen
 
     def send_tare(self) -> None:
         _log.debug('send tare')
-        if SCALE_CLASS.RELAY:
-            self.streaming_notifications()
+# not needed any longer as in non-streaming mode the tare weight is always send after tare
+#        if self.scale_class == SCALE_CLASS.RELAY:
+#            self.streaming_notifications()
         self.send_message(MSG.TARE,b'\x00')
-        if SCALE_CLASS.RELAY:
-            self.changes_notifications()
+# not needed any longer as in non-streaming mode the tare weight is always send after tare
+#        if self.scale_class == SCALE_CLASS.RELAY:
+#            self.changes_notifications()
 
     def send_get_settings(self) -> None:
         _log.debug('send get settings')
@@ -744,11 +796,11 @@ class AcaiaBLE(ClientBLE): # pyright: ignore [reportGeneralTypeIssues] # Argumen
                     0])) # only SCALE_CLASS.RELAY # 0: only weight changes are reported; 1: streaming weight changes at 1/10
 
     def slow_notifications(self) -> None:
-#        _log.debug('slow notifications')
+        _log.debug('slow notifications')
         self.send_event(
             bytes([ # pairs of key/setting
                     0,  # weight id
-                    (0 if SCALE_CLASS.RELAY # 0: only weight changes are reported; 1: streaming weight changes at 1/10
+                    (0 if self.scale_class == SCALE_CLASS.RELAY # 0: only weight changes are reported; 1: streaming weight changes at 1/10
                      else 3), # 0, 1, 3, 5, 7, 15, 31, 63, 127  # weight argument (speed of notifications in 1/10 sec; 0:  report changes in weight every 1/10)
                         # 5 or 7 seems to be good values for this app in Artisan
 #                    1,   # battery id
@@ -762,11 +814,11 @@ class AcaiaBLE(ClientBLE): # pyright: ignore [reportGeneralTypeIssues] # Argumen
         self.slow_notifications_sent = True
 
     def fast_notifications(self) -> None:
-#        _log.debug('fast notifications')
+        _log.debug('fast notifications')
         self.send_event(
             bytes([ # pairs of key/setting
                     0,  # weight id
-                    (1 if SCALE_CLASS.RELAY # 0: only weight changes are reported; 1: streaming weight changes at 1/10
+                    (1 if self.scale_class == SCALE_CLASS.RELAY # 0: only weight changes are reported; 1: streaming weight changes at 1/10
                      else 1),  # 0, 1, 3, 5, 7, 15, 31, 63, 127  # weight argument (speed of notifications in 1/10 sec) # larger values => slower updates
                         # 5 or 7 seems to be good values for this app in Artisan
 #                    1,   # battery id
@@ -885,3 +937,9 @@ class Acaia(Scale): # pyright: ignore [reportGeneralTypeIssues] # Argument to cl
 
     def tare_scale(self) -> None:
         self.acaia.send_tare()
+
+    def max_weight(self) -> float:
+        return self.acaia.max_weight
+
+    def readability(self) -> float:
+        return self.acaia.readability

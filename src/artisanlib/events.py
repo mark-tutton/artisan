@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from artisanlib.main import ApplicationWindow # noqa: F401 # pylint: disable=unused-import
     from PyQt6.QtGui import QCloseEvent # pylint: disable=unused-import
 
-from artisanlib.util import uchr, comma2dot
+from artisanlib.util import uchr, comma2dot, eventtime2string
 from artisanlib.dialogs import ArtisanResizeablDialog, ArtisanDialog
 from artisanlib.widgets import MyQComboBox, MyQDoubleSpinBox
 
@@ -100,6 +100,27 @@ class EventsDlg(ArtisanResizeablDialog):
         self.buttonpalette_tooltips:List[bool] =                  [self.aw.show_extrabutton_tooltips_default]*self.aw.max_palettes     # show tooltips flag per pallet
         self.buttonpalette_slider_alternative_layout:List[bool] = [self.aw.eventsliderAlternativeLayout_default]*self.aw.max_palettes  # alternative layout flag per pallet
         self.buttonpalette_label:str = self.aw.buttonpalette_label
+        self.eventsliderAlternativeLayout:bool = self.aw.eventsliderAlternativeLayout_default
+        self.eventsliderAlternativeLayoutstored:bool = self.aw.eventsliderAlternativeLayout_default
+        self.eventsliderKeyboardControlstored:bool = True
+        self.autoDropModestored:int = self.aw.qmc.autoDropMode
+        self.autoChargeModestored:int = self.aw.qmc.autoChargeMode
+        self.autoDropFlagstored:bool = self.aw.qmc.autoDropFlag
+        self.autoChargeFlagstored:bool = self.aw.qmc.autoChargeFlag
+        self.chargeTimerPeriodstored:int = self.aw.qmc.chargeTimerPeriod
+        self.chargeTimerFlagstored:bool = self.aw.qmc.chargeTimerFlag
+        self.etypeComboBoxstored_currentIndex:int = self.aw.etypeComboBox.currentIndex()
+        self.etypesstored:List[str] = self.aw.qmc.etypes[:]
+        self.eventsGraphflagstored:int = self.aw.qmc.eventsGraphflag
+        self.showEtypesstored:List[bool] = self.aw.qmc.showEtypes[:]
+        self.showeventsonbtstored:bool = self.aw.qmc.showeventsonbt
+        self.annotationsflagstored:int = self.aw.qmc.annotationsflag
+        self.eventsshowflagstored:int = self.aw.qmc.eventsshowflag
+        self.eventsbuttonflagstored:int = self.aw.eventsbuttonflag
+        self.markTPFlagstored:bool = self.aw.qmc.markTPflag
+        self.show_extrabutton_tooltips:bool = self.aw.show_extrabutton_tooltips_default
+        self.mark_last_button_pressed:bool = self.aw.mark_last_button_pressed_default
+        self.buttonsize:int = self.aw.buttonsize_default
         # styles
         self.EvalueColor:List[str] = self.aw.qmc.EvalueColor_default.copy()
         self.EvalueMarker:List[str] = ['o','s','h','D']
@@ -1817,7 +1838,7 @@ class EventsDlg(ArtisanResizeablDialog):
 
     @pyqtSlot(bool)
     def restorepaletteeventbuttons(self, _:bool = False) -> None:
-        filename = self.aw.ArtisanOpenFileDialog(msg=QApplication.translate('Message','Load Palettes'),path=self.aw.profilepath)
+        filename = self.aw.ArtisanOpenFileDialog(msg=QApplication.translate('Message','Load Palettes'), ext='*.apal')
         if filename:
             maxlen = self.aw.loadPalettes(filename,self.aw.buttonpalette)
             if maxlen is not None:
@@ -2706,7 +2727,8 @@ class EventsDlg(ArtisanResizeablDialog):
         if hheader is not None:
             hheader.setStretchLastSection(False)
             self.eventbuttontable.resizeColumnsToContents()
-            hheader.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
+            if platform.system() != 'Windows':  # allow resizing as behavior is different on Windows
+                hheader.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
             hheader.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
             hheader.resizeSection(6, hheader.sectionSize(6) + 15)
             hheader.resizeSection(7, self.aw.standard_button_min_width_px)
@@ -2720,11 +2742,10 @@ class EventsDlg(ArtisanResizeablDialog):
 
         # remember the columnwidth
         for i, _ in enumerate(self.aw.eventbuttontablecolumnwidths):
-            if i not in [5,6,7,8]:
-                try:
-                    self.eventbuttontable.setColumnWidth(i,self.aw.eventbuttontablecolumnwidths[i])
-                except Exception: # pylint: disable=broad-except
-                    pass
+            try:
+                self.eventbuttontable.setColumnWidth(i,self.aw.eventbuttontablecolumnwidths[i])
+            except Exception: # pylint: disable=broad-except
+                pass
 
     @pyqtSlot(bool)
     def copyEventButtonTabletoClipboard(self, _:bool=False) -> None:
@@ -3060,7 +3081,7 @@ class EventsDlg(ArtisanResizeablDialog):
             return
         try:
             focusWidget = QApplication.focusWidget()
-            if focusWidget is not None and isinstance(focusWidget, QLineEdit):
+            if focusWidget is not None and isinstance(focusWidget, QLineEdit): # pyrefly: ignore[invalid-argument]
                 fw:QLineEdit = focusWidget
                 fw.editingFinished.emit()
         except Exception: # pylint: disable=broad-except
@@ -3317,7 +3338,7 @@ class EventsDlg(ArtisanResizeablDialog):
         self.showEtypesstored = self.aw.qmc.showEtypes[:]
         self.eventsGraphflagstored = self.aw.qmc.eventsGraphflag
         self.etypesstored = self.aw.qmc.etypes
-        self.etypeComboBoxstored = self.aw.etypeComboBox
+        self.etypeComboBoxstored_currentIndex = self.aw.etypeComboBox.currentIndex()
         self.chargeTimerFlagstored = self.aw.qmc.chargeTimerFlag
         self.chargeTimerPeriodstored = self.aw.qmc.chargeTimerPeriod
         self.autoChargeFlagstored = self.aw.qmc.autoChargeFlag
@@ -3391,7 +3412,10 @@ class EventsDlg(ArtisanResizeablDialog):
         self.aw.qmc.showEtypes = self.showEtypesstored[:]
         self.aw.qmc.eventsGraphflag = self.eventsGraphflagstored
         self.aw.qmc.etypes = self.etypesstored
-        self.aw.etypeComboBox = self.etypeComboBoxstored
+        try:
+            self.aw.etypeComboBox.setCurrentIndex(self.etypeComboBoxstored_currentIndex)
+        except Exception: # pylint: disable=broad-except
+            pass
         self.aw.qmc.chargeTimerFlag = self.chargeTimerFlagstored
         self.aw.qmc.chargeTimerPeriod = self.chargeTimerPeriodstored
         self.aw.qmc.autoChargeFlag = self.autoChargeFlagstored
@@ -3755,7 +3779,7 @@ class customEventDlg(ArtisanDialog):
             event_time = self.aw.qmc.timex[time_idx]
             if self.aw.qmc.timeindex[0] > -1:
                 event_time -= self.aw.qmc.timex[self.aw.qmc.timeindex[0]]
-            event_time_str = ' @ ' + self.aw.eventtime2string(event_time)
+            event_time_str = ' @ ' + eventtime2string(event_time)
         else:
             event_time_str = ''
         self.setWindowTitle(QApplication.translate('Form Caption','Event') + event_time_str)

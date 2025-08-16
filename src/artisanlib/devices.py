@@ -1013,6 +1013,7 @@ class DeviceAssignmentDlg(ArtisanResizeablDialog):
         self.yoctoBoxRemoteFlag.stateChanged.connect(self.yoctoBoxRemoteFlagStateChanged)
         yoctoServerIdLabel = QLabel(QApplication.translate('Label','VirtualHub'))
         self.yoctoServerId = QLineEdit(self.aw.qmc.yoctoServerID)
+        self.yoctoServerId.setToolTip(QApplication.translate('Tooltip','Network IP address or name of the remote VirtualHub'))
         self.yoctoServerId.setAlignment(Qt.AlignmentFlag.AlignRight)
         self.yoctoServerId.setMinimumWidth(100)
         self.yoctoServerId.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Minimum)
@@ -1150,6 +1151,24 @@ class DeviceAssignmentDlg(ArtisanResizeablDialog):
         self.santokerPort.setValidator(QIntValidator(1, 65535,self.santokerPort))
         self.santokerPort.setEnabled(not self.aw.santokerSerial)
 
+        eventFlagLabels = [
+            QApplication.translate('Label','CHARGE'),
+            QApplication.translate('Label','DRY'),
+            QApplication.translate('Label','FCs'),
+            QApplication.translate('Label','FCe'),
+            QApplication.translate('Label','SCs'),
+            QApplication.translate('Label','SCe'),
+            QApplication.translate('Label','DROP')
+        ]
+        self.santokerEventFlags:List[QCheckBox] = [QCheckBox(l) for l in eventFlagLabels]
+        self.santokerEventFlags[3].setEnabled(False) # not available
+        self.santokerEventFlags[5].setEnabled(False) # not available
+        for i, cb in enumerate(self.santokerEventFlags):
+            cb.setToolTip(QApplication.translate('Tooltip','Receive {} event from machine').format(cb.text()))
+            if len(self.aw.santokerEventFlags) > i:
+                cb.setChecked(self.aw.santokerEventFlags[i])
+
+
         self.santokerSerialFlag = QCheckBox(QApplication.translate('Label','Serial'))
         self.santokerSerialFlag.setChecked(self.aw.santokerSerial and not self.aw.santokerBLE)
         self.santokerSerialFlag.stateChanged.connect(self.santokerSerialStateChanged)
@@ -1186,6 +1205,12 @@ class DeviceAssignmentDlg(ArtisanResizeablDialog):
 #        kaleidoPIDLabel = QLabel('PID')
 #        self.kaleidoPIDFlag = QCheckBox()
 #        self.kaleidoPIDFlag.setChecked(self.aw.kaleidoPID)
+
+        self.kaleidoEventFlags:List[QCheckBox] = [QCheckBox(l) for l in eventFlagLabels]
+        for i, cb in enumerate(self.kaleidoEventFlags):
+            cb.setToolTip(QApplication.translate('Tooltip','Receive {} event from machine').format(cb.text()))
+            if len(self.aw.kaleidoEventFlags) > i:
+                cb.setChecked(self.aw.kaleidoEventFlags[i])
 
         mugmaHostLabel = QLabel(QApplication.translate('Label','Host'))
         self.mugmaHost = QLineEdit(self.aw.mugmaHost)
@@ -1226,12 +1251,25 @@ class DeviceAssignmentDlg(ArtisanResizeablDialog):
         santokerHBox.addStretch()
         santokerHBox.addLayout(santokerNetworkGrid)
         santokerHBox.addStretch()
+
+        santokerEventFlagHBox = QHBoxLayout()
+        santokerEventFlagHBox.setSpacing(17)
+        santokerEventFlagHBox.addStretch()
+        santokerSerialHBox.addSpacing(20)
+        for cb in self.santokerEventFlags:
+            santokerEventFlagHBox.addWidget(cb)
+        santokerSerialHBox.addSpacing(20)
+        santokerEventFlagHBox.addStretch()
+
         santokerVBox = QVBoxLayout()
         santokerVBox.addLayout(santokerSerialHBox)
+        santokerVBox.addSpacing(15)
         santokerVBox.addLayout(santokerHBox)
+        santokerVBox.addSpacing(15)
+        santokerVBox.addLayout(santokerEventFlagHBox)
         santokerVBox.addStretch()
         santokerVBox.setSpacing(5)
-        santokerVBox.setContentsMargins(0,0,0,0)
+        santokerVBox.setContentsMargins(7,5,7,5) # left, top, right, bottom
 
         santokerNetworkGroupBox = QGroupBox('Santoker')
         santokerNetworkGroupBox.setLayout(santokerVBox)
@@ -1245,16 +1283,30 @@ class DeviceAssignmentDlg(ArtisanResizeablDialog):
 #        kaleidoNetworkGrid.addWidget(self.kaleidoPIDFlag,2,0)
 #        kaleidoNetworkGrid.addWidget(kaleidoPIDLabel,2,1)
         kaleidoNetworkGrid.setSpacing(20)
-        kaleidoNetworkGroupBox = QGroupBox('Kaleido')
-        kaleidoNetworkGroupBox.setLayout(kaleidoNetworkGrid)
         kaleidoHBox = QHBoxLayout()
-        kaleidoHBox.addWidget(kaleidoNetworkGroupBox)
+        kaleidoHBox.addLayout(kaleidoNetworkGrid)
         kaleidoHBox.addStretch()
+
+        kaleidoEventFlagHBox = QHBoxLayout()
+        kaleidoEventFlagHBox.setSpacing(17)
+        kaleidoEventFlagHBox.addStretch()
+        kaleidoEventFlagHBox.addSpacing(20)
+        for cb in self.kaleidoEventFlags:
+            kaleidoEventFlagHBox.addWidget(cb)
+        kaleidoEventFlagHBox.addSpacing(20)
+        kaleidoEventFlagHBox.addStretch()
+
         kaleidoVBox = QVBoxLayout()
         kaleidoVBox.addLayout(kaleidoHBox)
+        kaleidoVBox.addSpacing(15)
+        kaleidoVBox.addLayout(kaleidoEventFlagHBox)
         kaleidoVBox.addStretch()
         kaleidoVBox.setSpacing(5)
-        kaleidoVBox.setContentsMargins(0,0,0,0)
+        kaleidoVBox.setContentsMargins(7,5,7,5) # left, top, right, bottom
+
+        kaleidoNetworkGroupBox = QGroupBox('Kaleido')
+        kaleidoNetworkGroupBox.setLayout(kaleidoVBox)
+
 
         mugmaNetworkGrid = QGridLayout()
         mugmaNetworkGrid.addWidget(mugmaHostLabel,0,1)
@@ -1437,7 +1489,7 @@ class DeviceAssignmentDlg(ArtisanResizeablDialog):
         #LAYOUT TAB 7 (Santoker)
         tab7VLayout = QVBoxLayout()
         tab7VLayout.addWidget(santokerNetworkGroupBox)
-        tab7VLayout.addLayout(kaleidoVBox)
+        tab7VLayout.addWidget(kaleidoNetworkGroupBox)
         tab7VLayout.addStretch()
         tab7V2Layout = QVBoxLayout()
         tab7V2Layout.addLayout(mugmaVBox)
@@ -1576,6 +1628,7 @@ class DeviceAssignmentDlg(ArtisanResizeablDialog):
                     self.scale2EditButton.setEnabled(False)
                 else:
                     self.scale2NameComboBox.setEnabled(True)
+                    self.scale2EditButton.setEnabled(True)
             self.scale2ModelComboBox.currentIndexChanged.connect(self.scale2ModelChanged)
             self.scale2NameComboBox.currentIndexChanged.connect(self.scale2NameChanged)
             self.scale2ScanButton.clicked.connect(self.scanScale2)
@@ -1807,9 +1860,9 @@ class DeviceAssignmentDlg(ArtisanResizeablDialog):
             containerRoasted = QGroupBox(QApplication.translate('GroupBox','Container Roasted'))
             containerRoasted.setLayout(containerRoastedHLayout)
 
-            taskGreen = QGroupBox(QApplication.translate('GroupBox', 'Task Green'))
+            taskGreen = QGroupBox(QApplication.translate('GroupBox', 'Task Display Green'))
             taskGreen.setLayout(taskWebDisplayGreenVLayout)
-            taskRoasted = QGroupBox(QApplication.translate('GroupBox', 'Task Roasted'))
+            taskRoasted = QGroupBox(QApplication.translate('GroupBox', 'Task Display Roasted'))
             taskRoasted.setLayout(taskWebDisplayRoastedVLayout)
 
             tab8Layout.addWidget(scale1,0,0)
@@ -1857,7 +1910,7 @@ class DeviceAssignmentDlg(ArtisanResizeablDialog):
             C8Widget.setLayout(tab8Layout)
         else:
             C8Widget.setLayout(tab8LayoutOFF)
-        self.TabWidget.addTab(C8Widget,QApplication.translate('Tab','Scales'))
+        self.TabWidget.addTab(C8Widget,QApplication.translate('Tab','Batch Manager'))
         self.TabWidget.currentChanged.connect(self.tabSwitched)
         #incorporate layouts
         Mlayout = QVBoxLayout()
@@ -2025,7 +2078,7 @@ class DeviceAssignmentDlg(ArtisanResizeablDialog):
             self.aw.scale2_id = self.scale2_devices[i][1]
             self.aw.scale_manager.set_scale2_signal.emit(self.aw.scale2_model, self.aw.scale2_id, self.aw.scale2_name)
             self.aw.scale_manager.connect_scale2_signal.emit()
-        # i == -1 if self.scale1NameComboBox is empty!
+        # i == -1 if self.scale2NameComboBox is empty!
         else:
             self.aw.scale_manager.set_scale2_signal.emit(-1, '', '')
 
@@ -2472,7 +2525,7 @@ class DeviceAssignmentDlg(ArtisanResizeablDialog):
                 item0 = layout.itemAt(0)
                 if item0 is not None:
                     checkBox = item0.widget()
-                    if checkBox is not None and isinstance(checkBox, QCheckBox):
+                    if checkBox is not None and isinstance(checkBox, QCheckBox): # pyrefly: ignore[invalid-argument]
                         return checkBox.isChecked() # type:ignore[reportAttributeAccessIssue, unused-ignore] # pyright reports isChecked not known for QWidget
         return False
 
@@ -3270,6 +3323,9 @@ class DeviceAssignmentDlg(ArtisanResizeablDialog):
 
             self.aw.ser.externalprogram = self.programedit.text()
             self.aw.ser.externaloutprogram = self.outprogramedit.text()
+
+            self.aw.santokerEventFlags = [cb.isChecked() for cb in self.santokerEventFlags]
+            self.aw.kaleidoEventFlags = [cb.isChecked() for cb in self.kaleidoEventFlags]
 
             self.aw.two_bucket_mode = self.dual_bucket_mode.isChecked()
             self.aw.green_task_precision = self.greenTaskPrecision.value()

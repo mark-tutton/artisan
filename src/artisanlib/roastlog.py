@@ -9,11 +9,9 @@ from requests_file import FileAdapter # type: ignore  # @UnresolvedImport
 import re
 from lxml import html
 import logging
-from typing import Final, List, Optional, TYPE_CHECKING
+from typing import Final, List, Optional, Callable, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from artisanlib.main import ApplicationWindow # pylint: disable=unused-import
-    from artisanlib.atypes import ProfileData # pylint: disable=unused-import
     from PyQt6.QtCore import QUrl # pylint: disable=unused-import
 
 try:
@@ -23,12 +21,17 @@ except ImportError:
 
 
 from artisanlib.util import encodeLocal, stringtoseconds
+from artisanlib.atypes import ProfileData
 
 
 _log: Final[logging.Logger] = logging.getLogger(__name__)
 
 # returns a dict containing all profile information contained in the given RoastLog document pointed by the given QUrl
-def extractProfileRoastLog(url:'QUrl', _:'ApplicationWindow') -> Optional['ProfileData']:
+def extractProfileRoastLog(url:'QUrl',
+        _etypesdefault:List[str],
+        _alt_etypesdefault:List[str],
+        _artisanflavordefaultlabels:List[str],
+        _eventsExternal2InternalValue:Callable[[int],float]) -> Optional[ProfileData]:
     res:ProfileData = ProfileData() # the interpreted data set
     try:
         s = requests.Session()
@@ -48,7 +51,7 @@ def extractProfileRoastLog(url:'QUrl', _:'ApplicationWindow') -> Optional['Profi
             tag_elements = tree.xpath(f'//td[contains(@class,"text-rt") and normalize-space(text())="{tag}"]/following::td[1]/text()')
             if isinstance(tag_elements, list) and len(tag_elements)>0:
                 tag_values[tag] = '\n'.join([str(e).strip() for e in tag_elements])
-        # {'Roastable:': '2003000 Diablo FTO BULK', 'Starting mass:': '140.00 lb', 'Ending mass:': '116.80 lb', 'Roasted on:': 'Thu, Jun 6th, 2019 11:11 PM', 'Roasted by:': 'Ryan@caffeladro.com', 'Roaster:': 'Diedrich CR-70'}
+        # {'Roastable:': '2003000 Diablo FTO BULK', 'Starting mass:': '140.00 lb', 'Ending mass:': '116.80 lb', 'Roasted on:': 'Thu, Jun 6th, 2019 11:11 PM', 'Roasted by:': 'infor@coffee.com', 'Roaster:': 'Diedrich CR-70'}
 
         if 'Roasted on:' in tag_values:
             try:
@@ -151,11 +154,11 @@ def extractProfileRoastLog(url:'QUrl', _:'ApplicationWindow') -> Optional['Profi
                     if len(timex) == len(temp1):
                         res['temp2'] = temp1
                     else:
-                        res['temp2'] = [-1]*len(timex)
+                        res['temp2'] = [-1.0]*len(timex)
                     if len(timex) == len(temp2):
                         res['temp1'] = temp2
                     else:
-                        res['temp1'] = [-1]*len(timex)
+                        res['temp1'] = [-1.0]*len(timex)
                     if len(temp3) == len(timex) or len(temp4) == len(timex):
                         temp3_visibility = True
                         temp4_visibility = True
@@ -165,12 +168,12 @@ def extractProfileRoastLog(url:'QUrl', _:'ApplicationWindow') -> Optional['Profi
                         if len(temp3) == len(timex):
                             res['extratemp1'] = [temp3]
                         else:
-                            res['extratemp1'] = [[-1]*len(timex)]
+                            res['extratemp1'] = [[-1.0]*len(timex)]
                             temp3_visibility = False
                         if len(temp4) == len(timex):
                             res['extratemp2'] = [temp4]
                         else:
-                            res['extratemp2'] = [[-1]*len(timex)]
+                            res['extratemp2'] = [[-1.0]*len(timex)]
                             temp4_visibility = False
                         res['extraname1'] = [temp3_label]
                         res['extraname2'] = [temp4_label]

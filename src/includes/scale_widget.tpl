@@ -2,29 +2,6 @@
 <html id="html">
 
 <!-- 
-
-TODO:
-- fixes
-
-DONE:
-- enable cancel click per api
-- add timer
-- show loss for type 1
-- improve dialog
-- outer bar (total_percent)
-- zoom feature (>99%)
-- communication back to artisan
-  - dialog on click: yes / no; send "cancelled" on yes
-- add some typings
-- websocket communication
-- general layout, strings, responsive
-- integrate SVGs
-- states 0, 1, 3, 4
-- state 2, main percent display
-- dark mode, incl. change of svg icons
-- buckets
-- show loss (state: done && percent != 0)
-
 Receives data in the shape of
 { 
     id:str (blend component / roast batch nr) | max 6 characters
@@ -32,6 +9,7 @@ Receives data in the shape of
     subtitle:str
     batchsize:str | max ~6 characters
     weight:str | max 6 characters
+    final_weight:str | max 6 characters
     percent: float
     state:int (0:disconnected, 1:connected, 2:weighing, 3:done, 4:canceled)
     bucket: int (0,1,2)
@@ -50,7 +28,8 @@ Receives data in the shape of
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="mobile-web-app-status-bar-style" content="black">
     <meta name="mobile-web-app-title" content="{{window_title}}">
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;600">
+    <!-- use local fonts -->
+    <!-- <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;600"> -->
     <title>{{window_title}}</title>
     <noscript>
         <style type="text/css">
@@ -62,6 +41,35 @@ Receives data in the shape of
             This display cannot work without JavaScript turned on, sorry!
         </div>
     </noscript>
+
+    <!-- load local fonts  -->
+    <style type='text/css'>
+        /* roboto-300 */
+        @font-face {
+            font-family: 'Roboto';
+            font-style: normal;
+            font-weight: 300;
+            font-stretch: 100%;
+            src: url('roboto-300.woff2') format('woff2');
+        }
+
+        /* roboto-regular */
+        @font-face {
+            font-family: 'Roboto';
+            font-style: normal;
+            font-weight: 400;
+            src: url('roboto-regular.woff2') format('woff2');
+        }
+
+        /* roboto-600 */
+        @font-face {
+            font-family: 'Roboto';
+            font-style: normal;
+            font-weight: 600;
+            src: url('roboto-600.woff2') format('woff2');
+        }
+    </style>
+
     <script type="text/javascript" src="fitty_patched.js"></script>
     <script type="text/javascript">
         // @ts-check
@@ -71,6 +79,11 @@ Receives data in the shape of
 
         // how often the websocket will be tried if not open in ms
         const WEBSOCKET_RECONNECT_INTERVAL = 10000;
+
+        // how long the initial dialog (click to go fullscreen) is displayed
+        // it is only shown on mobile devices (~90% hit rate)
+        // if 0, it will not be displayed
+        const CLICK_FOR_FULLSCREEN_DISPLAY_TIME_MS = 2000;
 
         // if true, scale is red if percent > 102.5 and frame is red if total_percent > 100
         const USERED = false;
@@ -140,9 +153,9 @@ Receives data in the shape of
                 'percent', 'zoom', 'zoom2', 'scale_for_clipping',
                 'scale_icon_done', 'scale_icon_initial',
                 'blend_percent', 'buckets_grid_part',
-                'weight', 'scale_icon_image', 'bucket_on_scale',
+                'weight', 'final_weight', 'scale_icon_image', 'bucket_on_scale',
                 'coffee_svg', 'roast_svg', 'done_svg', 'cancel_svg',
-                'dialog_cancel_svg', 'dialog_close_icon',
+                'dialog_cancel_svg', 'dialog_close_icon', 'dialog_fullscreen_svg',
                 'dialog_text', 'dialog_svg',
                 'coffee_svg_dark', 'roast_svg_dark',
                 'outer_frame', 'outerdiv',
@@ -153,7 +166,7 @@ Receives data in the shape of
                     elements[prop] = el;
                 }
             }
-            for (const prop of ['cancel_dialog', 'text_dialog']) {
+            for (const prop of ['cancel_dialog', 'text_dialog', 'fullscreen_dialog']) {
                 const el = document.getElementById(prop);
                 if (el) {
                     dialogs[prop] = /** @type HTMLDialogElement */(el);
@@ -206,7 +219,7 @@ Receives data in the shape of
         }
 
         function setTexts() {
-            for (const prop of ['id', 'batchsize', 'weight', 'blend_percent']) {
+            for (const prop of ['id', 'batchsize', 'weight', 'final_weight', 'blend_percent']) {
                 elements[prop].textContent = parsedData[prop] || '';
             }
             for (const prop of ['title', 'subtitle',]) {
@@ -336,8 +349,7 @@ Receives data in the shape of
                             if (parsedData.timer) {
                                 openTimerDialog(parsedData.timer);
                             }
-                            elements.percent.classList.remove('big-font-roasted');
-                            elements.percent.classList.add('big-font');
+                            elements.percent.classList.replace('big-font-roasted', 'big-font');
                             // main scale
                             if (parsedData.percent >= 0) {
                                 // display bucket on scale and %
@@ -349,12 +361,15 @@ Receives data in the shape of
                                 elements.bucket_on_scale.style.border = BORDER;
                                 elements.bucket_on_scale.style.top = BUCKETPOSITION;
                                 elements.bucket_on_scale.style.left = BUCKETPOSITION;
-                                elements.percent.style.fontSize = '32cqmin';
+                                elements.percent.style.fontSize = '26cqmin';
+                                elements.percent.style.fontWeight = '400';
+                                elements.weight.style.display = 'block';
 
+                                elements.weight.classList.remove('zoom-weight');
                                 if (parsedData.percent <= 99) {
                                     // normal count until 99%
                                     elements.scale_rect.style.background = `linear-gradient(0deg, ${ABLUE} 0 ${parsedData.percent}%, #b5b5b5 ${parsedData.percent}% 100%)`;
-                                    if (parsedData.percent >= 95) {
+                                    if (parsedData.percent >= 5) {
                                         elements.timer_progress.style.setProperty('--progress-color', 'white');
                                     }
                                 } else if (Math.abs(100 - (Math.round(parsedData.percent * 100) / 100)) < TARGET_DEVIATION) {
@@ -367,12 +382,15 @@ Receives data in the shape of
                                     elements.bucket_on_scale.style.top = 'calc(12% - 2vmin)';
                                     elements.bucket_on_scale.style.left = 'calc(12% - 2vmin)';
                                     elements.percent.style.color = 'white';
-                                    elements.percent.style.fontSize = '28cqmin';
+                                    elements.percent.style.fontSize = '22cqmin';
+                                    elements.percent.style.fontWeight = '400';
+                                    elements.weight.style.display = 'none';
                                 } else {
                                     // zoom for >99% (and != 100)
                                     elements.scale_rect.style.backgroundColor = ABLUE;
                                     elements.timer_progress.style.setProperty('--progress-color', 'white');
                                     elements.percent.style.display = 'none';
+                                    elements.weight.classList.add('zoom-weight');
                                     if (parsedData.percent < 100) {
                                         const zoomsize = (100 * (parsedData.percent - 99)).toFixed(2);
                                         elements.zoom.style.display = 'block';
@@ -388,7 +406,6 @@ Receives data in the shape of
                                         elements.zoom2.style.height = `${zoomsize.toFixed(2)}%`;
                                         elements.zoom2.style.width = elements.zoom2.style.height;
                                         const zoomperc = (100 - zoomsize) / 2;
-                                        // const topleft = `calc(${zoomperc.toFixed(2)}% - 0.25vmin)`;
                                         elements.zoom2.style.top = `${zoomperc.toFixed(2)}%`;
                                         elements.zoom2.style.left = elements.zoom2.style.top;
                                     } else {
@@ -402,11 +419,11 @@ Receives data in the shape of
                             } else {
                                 elements.bucket_on_scale.style.display = 'none';
                                 elements.percent.style.display = 'none';
+                                elements.weight.style.display = 'none';
                             }
                         } else if (parsedData.type === 1) {
                             elements.percent.innerHTML = parsedData.loss;
-                            elements.percent.classList.add('big-font-roasted');
-                            elements.percent.classList.remove('big-font');
+                            elements.percent.classList.replace('big-font', 'big-font-roasted');
                             elements.percent.style.color = 'white';
                             elements.percent.style.display = 'block';
                             elements.scale_rect.style.display = 'block';
@@ -418,6 +435,7 @@ Receives data in the shape of
                             elements.bucket_on_scale.style.top = 'calc(12% - 3vmin)';
                             elements.bucket_on_scale.style.left = 'calc(12% - 3vmin)';
                         }
+                        break;
                     default:
                         break;
                 }
@@ -429,7 +447,7 @@ Receives data in the shape of
                     } else {
                         let perc = (200 - parsedData.total_percent).toFixed(2);
                         if (parsedData.total_percent > 200) {
-                            let perc = '0';
+                            perc = '0';
                         }
                         elements.outer_frame.style.background = `linear-gradient(0deg, ${ABLUE} 0 ${perc}%, ${ARED} ${perc}% 100%)`;
                     }
@@ -446,14 +464,14 @@ Receives data in the shape of
         function processClick() {
             if (parsedData.state === WEIGHING) {
                 openCancelDialog();
-            } else if (ws && ws.readyState === ws.OPEN) {
+            } else if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send('clicked');
             }
         }
 
         function processDefinitiveClick(returnValue) {
             console.log(`Dialog, click = ${returnValue}`);
-            if (returnValue === 'cancel' && ws.readyState === ws.OPEN) {
+            if (returnValue === 'cancel' && ws.readyState === WebSocket.OPEN) {
                 ws.send('cancelled');
             }
         }
@@ -467,24 +485,9 @@ Receives data in the shape of
         function closeTimerDialog() {
             clearInterval(interval);
             elements.timer_progress.style.display = 'none';
-            // if (showingTimerDialog) {
-            //     // showingTimerDialog.close();
-            //     showingTimerDialog = undefined;
-            //     if (allowClick && !showingCancelDialog && !showingMessageDialog) {
-            //         // timeout, otherwise, proessClick will be called with the current click
-            //         setTimeout(() => {
-            //             document.body.addEventListener("click", processClick);
-            //             if (websocket === null) {
-            //                 wsConnect();
-            //             }
-            //         }, 100);
-            //     }
-            // }
         }
 
         function openTimerDialog(seconds) {
-            // document.body.removeEventListener("click", processClick);
-            // showingTimerDialog = dialogs.timer_dialog;
             timerVal = 0;
             elements.timer_progress['value'] = timerVal;
             elements.timer_progress['max'] = seconds;
@@ -496,7 +499,6 @@ Receives data in the shape of
                 }
             }, 250);
             elements.timer_progress.style.display = 'block';
-            // showingTimerDialog.showModal();
         }
 
         function openMessageDialog(text) {
@@ -544,19 +546,6 @@ Receives data in the shape of
             elements.dialog_cancel_svg.addEventListener("click", () => closeCancelDialog('cancel'));
             elements.dialog_close_icon.addEventListener("click", () => closeCancelDialog('dialogCancelled'));
 
-            // dialogs.timer_dialog.addEventListener("close", () => {
-            //     showingMessageDialog = undefined;
-            //     if (allowClick && !showingCancelDialog) {
-            //         // timeout, otherwise, proessClick will be called with the current click
-            //         setTimeout(() => {
-            //             document.body.addEventListener("click", processClick);
-            //             if (websocket === null) {
-            //                 wsConnect();
-            //             }
-            //         }, 100);
-            //     }
-            // });
-
             dialogs.cancel_dialog.addEventListener("close", () => {
                 showingCancelDialog = undefined;
                 if (allowClick && !showingMessageDialog) {
@@ -577,8 +566,6 @@ Receives data in the shape of
 
             // error / message dialog
             dialogs.text_dialog.addEventListener("click", () => closeMessageDialog());
-            // dialogs.text_dialog.addEventListener("close", () => closeMessageDialog());
-
         }
 
         // adapted from https://stackoverflow.com/a/60971231
@@ -633,31 +620,42 @@ Receives data in the shape of
             colorSchemeQuery.addEventListener('change', updateColorScheme);
         }
 
+        function enterFullScreen() {
+            if (!document.fullscreenElement) {
+                document.getElementById('outer_frame')?.requestFullscreen({ navigationUI: 'hide' });
+            }
+        }
+
+        // https://stackoverflow.com/a/67909182
+        function isTouchEventsEnabled() {
+            // Bug in FireFox+Windows 10, navigator.maxTouchPoints is incorrect when script is running inside frame.
+            const navigator = (window.top || window).navigator;
+            const maxTouchPoints = Number.isFinite(navigator.maxTouchPoints) ? navigator.maxTouchPoints : navigator['msMaxTouchPoints'];
+            if (Number.isFinite(maxTouchPoints)) {
+                // Windows 10 system reports that it supports touch, even though it actually doesn't (ignore msMaxTouchPoints === 256).
+                return maxTouchPoints > 0 && maxTouchPoints !== 256;
+            }
+            return 'ontouchstart' in window;
+        }
+
         window.addEventListener('DOMContentLoaded', async () => {
             updateColorScheme();
             resetStyles();
 
             setupClickDialog();
 
-            // fitty(elements.id, { minSize: 14, multiLine: false });
             fitty(elements.id, { minSize: 14, multiLine: false }, elements.batchsize);
 
             // initial state before anything is received
-            usedata({ data: '{"type":0,"state":0,"id":"","title":"","subtitle":"","batchsize":"","weight":"","percent":0,"bucket":0,"blend_percent":"","total_percent":0}' });
+            usedata({ data: '{"type":0,"state":0,"id":"","title":"","subtitle":"","batchsize":"","weight":"","final_weight":"","percent":0,"bucket":0,"blend_percent":"","total_percent":0}' });
 
-            // TODO remove test data
-            // usedata({ data: '{"id":"","title":"Peru 2021, Negrisa","subtitle":"Negrisa, Peru","batchsize":"500g","weight":"","percent":0,"state":0,"bucket":0,"blend_percent":"","total_percent":0,"type":0}' });
-            // usedata({ data: '{ "id": "Batch 12", "title": "Custom Blend", "subtitle": "Huehuetenango, Guatemela", "batchsize": "12kg", "weight": "1.23kg", "percent": 99, "state": 2, "bucket": 1, "blend_percent": "33%", "total_percent": 77.123, "type": 0}' });
-            // usedata({ data: '{"type":0,"state":2,"percent":50,"weight":"6,00kg","bucket":1,"id":"2/3","title":"Mount Kenia","batchsize":"12kg","subtitle":"Kenia Mount Kenia Selection"}' });
-            // usedata({ data: '{"type":0,"state":2,"percent":99,"weight":"120g","bucket":1,"id":"2/3","title":"Mount Kenia","batchsize":"12kg","subtitle":"Kenia Mount Kenia Selection"}' });
-            // usedata({ data: '{"type":1,"state":0,"title":"Mount Kenia","batchsize":"12kg"}' });
-            // usedata({ data: '{"type":1,"state":1,"title":"Mount Kenia","batchsize":"12kg"}' });
-            // usedata({ data: '{"type":0,"state":3,"id":"2/3","blend_percent":"33%","title":"Mount Kenia","batchsize":"12kg"}' });
-            // usedata({ data: ' {"type":0,"state":2,"percent":99,"weight":"120g","bucket":3,"id":"2/3","blend_percent":"33%","title":"Mount Kenia","batchsize":"12kg","subtitle":"Kenia Mount Kenia Selection"}' });
-            // await new Promise(r => setTimeout(r, 2000));
-            // usedata({ data: '{"type":0,"state":3,"weight":"12,1kg","bucket":1,"id":"2/3","blend_percent":"33%","title":"Mount Kenia","batchsize":"12kg","subtitle":""}' });
-            // usedata({ data: '{"type":0,"state":0,"title":"Disconnected!","batchsize":"12kg","subtitle":"Kenia Mount Kenia Selection"}' });
-            // usedata({ data: '{"type":1,"state":3,"id":"P312","percent":-14,"title":"Custom Blend","batchsize":"12kg","weight":"10,3kg"}' });
+            if (CLICK_FOR_FULLSCREEN_DISPLAY_TIME_MS && !document.fullscreenElement && (navigator['userAgentData']?.mobile || isTouchEventsEnabled())) {
+                elements.dialog_fullscreen_svg.addEventListener("click", enterFullScreen);
+                dialogs.fullscreen_dialog.showModal();
+                setTimeout(() => {
+                    dialogs.fullscreen_dialog.close();
+                }, CLICK_FOR_FULLSCREEN_DISPLAY_TIME_MS);
+            }
         });
 
         function sleep(ms) {
@@ -789,7 +787,6 @@ Receives data in the shape of
 
         .title,
         .subtitle {
-            /* position: absolute; */
             width: 100%;
             text-align: center;
             font-size: max(32px, min(6vh, 6vw));
@@ -807,7 +804,6 @@ Receives data in the shape of
         .title-separate {
             display: none;
             margin-top: 30px;
-            /* margin-bottom: 20px; */
         }
 
         .id,
@@ -865,12 +861,12 @@ Receives data in the shape of
 
             /* fallbacks for browser that don't understand container size queries */
             bottom: 45px;
-            right: -30%;
+            right: -25%;
             width: 15%;
 
             bottom: 5cqmin;
-            right: -32cqmin;
-            width: 20cqmin;
+            right: -26cqmin;
+            width: 19cqmin;
         }
 
         .bucket-img {
@@ -882,7 +878,6 @@ Receives data in the shape of
         }
 
         .scale-rect {
-            /* transition: background 0.5s ease-in-out; */
             container-type: inline-size;
             container-name: scale;
             position: relative;
@@ -893,9 +888,6 @@ Receives data in the shape of
             margin-left: auto;
             margin-right: auto;
             aspect-ratio: 1 / 1;
-            /* minus titlerow and subtitlerow and some 10px; different in portrait */
-            /* max-height: calc(100vh - 2*(16px + max(60px, min(7vh, 7vw))) - 10px); */
-            /* max-width: calc(100vw - 50%); */
         }
 
         .scale-icon {
@@ -905,9 +897,6 @@ Receives data in the shape of
             margin-left: auto;
             margin-right: auto;
             aspect-ratio: 1 / 1;
-            /* minus titlerow and subtitlerow and some 10px; different in portrait */
-            /* max-height: calc(100vh - 2*(16px + max(60px, min(7vh, 7vw))) - 10px); */
-            /* max-width: calc(100vw - 50%); */
         }
 
         .scale-icon-image {
@@ -922,13 +911,25 @@ Receives data in the shape of
             font-weight: 300;
         }
 
+        .big-font-weight {
+            /* fallback if container query not supported */
+            font-size: calc(max(min(11vw, 20vh), 12px));
+            text-align: center;
+            font-weight: 300;
+        }
+
         @container scale (min-width: 0px) {
             .big-font {
                 font-size: 32cqmin;
             }
 
+            .big-font-weight {
+                font-size: 15cqmin;
+            }
+
             .big-font-roasted {
                 font-size: 19cqmin;
+                font-weight: 400;
             }
         }
 
@@ -939,16 +940,27 @@ Receives data in the shape of
             border: 0.5vmin solid #515151;
             border-radius: 100%;
             align-content: center;
+            display: block;
+            align-items: center;
         }
 
         .percent {
             margin-top: auto;
             margin-bottom: auto;
+            position: relative;
+            top: 4%;
             background: none;
+            z-index: 4;
+        }
+
+        .zoom-weight {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
         }
 
 
-        /* @media (orientation: landscape) { */
         @media (min-aspect-ratio: 55 / 46) {
 
             .scale-rect,
@@ -972,11 +984,10 @@ Receives data in the shape of
             }
         }
 
-        /* @media (orientation: portrait) { */
         @media (max-aspect-ratio: 1 / 1) {
             .title-separate {
                 display: block;
-                margin: 10px 0;
+                margin: 10px 7px;
             }
 
             .title-top {
@@ -1038,7 +1049,6 @@ Receives data in the shape of
         }
 
         .dialog-close-icon {
-            /* text-align: right; */
             margin-left: auto;
             width: fit-content;
             font-size: 50px;
@@ -1050,8 +1060,10 @@ Receives data in the shape of
             overflow: hidden;
             width: 100%;
             height: 100%;
-            margin-left: -0.25vmin;
-            margin-top: -0.25vmin;
+            margin-left: 0;
+            margin-top: 0;
+            border: none;
+            border-radius: 7%;
         }
 
         .zoom {
@@ -1077,33 +1089,26 @@ Receives data in the shape of
             -webkit-appearance: none;
             appearance: none;
             border: none;
-            /* border-radius: 30%; */
             background: none;
             margin-left: auto;
             margin-right: auto;
-            /* margin-top: 3%; */
             width: 90%;
             height: 5%;
             position: absolute;
             left: 5%;
-            top: 3%;
+            bottom: 3%;
         }
 
         progress::-webkit-progress-value {
             background-color: var(--progress-color, #2098c7);
-            /* border-radius: 30%; */
-            /* transition: width 0.4s ease-in; */
         }
 
         progress::-webkit-progress-bar {
             background: none;
-            /* border-radius: 30%; */
         }
 
         progress::-moz-progress-bar {
             background-color: var(--progress-color, #2098c7);
-            /* border-radius: 30%; */
-            /* transition: width 0.4s ease-in; */
         }
 
         progress {
@@ -1113,6 +1118,14 @@ Receives data in the shape of
 </head>
 
 <body style="height: 100%; margin: 0;">
+    <dialog closedby="any" id="fullscreen_dialog" style="border-radius: 10px;" class="nojsnoshow">
+        <div class="dialog-svg-container">
+            <svg id="dialog_fullscreen_svg" height="100%" viewBox="0 0 24 24" width="100%" version="1.1"
+                xmlns="http://www.w3.org/2000/svg" style="fill: #2098c7; cursor: pointer">
+                <path d="M 0,24 V 13.71429 h 3.4285715 v 6.85714 H 10.285714 V 24 Z M 20.571427,10.28571 V 3.42857 H 13.714286 V 0 H 24 v 10.28571 z" />
+            </svg>
+        </div>
+    </dialog>
     <dialog closedby="any" id="cancel_dialog" style="border-radius: 10px;" class="nojsnoshow">
         <div class="dialog-close-icon" id="dialog_close_icon">&cross;</div>
         <div class="dialog-svg-container">
@@ -1147,19 +1160,19 @@ Receives data in the shape of
                 <div class="scale-and-buckets" id="scale_and_buckets">
                     <div class="scale-div">
                         <div class="scale-rect" id="scale_rect">
-                            <progress id="timer_progress" value="0" max="100"></progress>
                             <div class="scale-for-clipping scale-rect" id="scale_for_clipping">
                                 <span class="zoom2" id="zoom2"></span>
                             </div>
                             <span class="bucket-on-scale" id="bucket_on_scale">
                                 <span class="percent big-font" id="percent"></span>
+                                <span class="percent big-font-weight" id="weight"></span>
                                 <span class="zoom" id="zoom"></span>
                             </span>
                             <div class="scale-icon" id="scale_icon_done">
                                 <div style="padding: 10%;">
                                     <svg id="done_svg" xmlns="http://www.w3.org/2000/svg" height="100%" viewBox="0 0 24 24" width="100%" version="1.1">
                                         <path d="M 12,24 C 10.34001,24 8.7801,23.685 7.32,23.055 5.8599,22.425 4.59,21.57 3.51,20.49 2.43,19.41 1.575,18.14001 0.945,16.68 0.315,15.21999 0,13.6599 0,12 0,10.3401 0.315,8.7801 0.945,7.32 1.575,5.8599 2.43,4.59 3.51,3.51 4.59,2.43 5.85999,1.575 7.32,0.945 8.78001,0.315 10.3401,0 12,0 c 1.6599,0 3.2199,0.315 4.68,0.945 1.4601,0.63 2.73,1.485 3.81,2.565 1.08,1.08 1.935,2.34999 2.565,3.81 C 23.685,8.78001 24,10.3401 24,12 c 0,1.6599 -0.315,3.2199 -0.945,4.68 -0.63,1.4601 -1.485,2.73 -2.565,3.81 -1.08,1.08 -2.34999,1.935 -3.81,2.565 C 15.21999,23.685 13.6599,24 12,24 Z m 0,-2.4 c 2.67999,0 4.95,-0.93 6.81,-2.79 C 20.67,16.95 21.6,14.6799 21.6,12 21.6,9.3201 20.67,7.05 18.81,5.19 16.95,3.33 14.6799,2.4 12,2.4 9.3201,2.4 7.05,3.33 5.19,5.19 3.33,7.05 2.4,9.3201 2.4,12 c 0,2.6799 0.93,4.95 2.79,6.81 1.86,1.86 4.1301,2.79 6.81,2.79 z" />
-                                        <path d="M 5.7433189,10.913879 9.7221742,15.090493 18.256681,6.1263883 19.584193,7.5211956 9.7221742,17.873612 4.4158072,12.308686 Z" />
+                                        <path d="M 9.8520512,17.954633 4.2484998,12.092527 5.922783,10.400489 9.9151482,14.402878 18.089213,6.0453675 19.7515,7.7014195 Z" />
                                     </svg>
                                     <svg id="cancel_svg" xmlns="http://www.w3.org/2000/svg" height="100%" viewBox="0 0 24 24" width="100%" version="1.1">
                                         <path d="M 7.68,18 12,13.68 16.32,18 18,16.32 13.68,12 18,7.68 16.32,6 12,10.32 7.68,6 6,7.68 10.32,12 6,16.32 Z M 12,24 Q 9.51,24 7.32,23.055 5.13,22.11 3.51,20.49 1.89,18.87 0.945,16.68 0,14.49 0,12 0,9.51 0.945,7.32 1.89,5.13 3.51,3.51 5.13,1.89 7.32,0.945 9.51,0 12,0 14.49,0 16.68,0.945 18.87,1.89 20.49,3.51 22.11,5.13 23.055,7.32 24,9.51 24,12 q 0,2.49 -0.945,4.68 -0.945,2.19 -2.565,3.81 -1.62,1.62 -3.81,2.565 Q 14.49,24 12,24 Z m 0,-2.4 q 4.02,0 6.81,-2.79 Q 21.6,16.02 21.6,12 21.6,7.98 18.81,5.19 16.02,2.4 12,2.4 7.98,2.4 5.19,5.19 2.4,7.98 2.4,12 2.4,16.02 5.19,18.81 7.98,21.6 12,21.6 Z M 12,12 Z" />
@@ -1190,6 +1203,7 @@ Receives data in the shape of
                                     </svg>
                                 </div>
                             </div>
+                            <progress id="timer_progress" value="0" max="100"></progress>
                         </div>
                         <div class="scale-icon" id="scale_icon_initial">
                             <div style="padding: 10%;">
@@ -1226,7 +1240,7 @@ Receives data in the shape of
                     <div class="subtitlerow" id="subtitlerow">
                         <span class="blend-percent" id="blend_percent"></span>
                         <span class="subtitle title-top" id="subtitle1" name="subtitle"></span>
-                        <span class="weight" id="weight"></span>
+                        <span class="weight" id="final_weight"></span>
                     </div>
                 </div>
             </div>

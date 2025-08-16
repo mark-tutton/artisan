@@ -54,9 +54,13 @@ DATA_FILES = [
         (r'includes/alarmclock.svg', '.'),
         (r'includes/alarmclock.ttf', '.'),
         (r'includes/alarmclock.woff', '.'),
+        (r'includes/roboto-300.woff2', '.'),
+        (r'includes/roboto-600.woff2', '.'),
+        (r'includes/roboto-regular.woff2', '.'),
         (r'includes/artisan.tpl', '.'),
         (r'includes/scale_widget.tpl', '.'),
         (r'includes/bigtext.js', '.'),
+        (r'includes/fitty_patched.js', '.'),
         (r'includes/jquery-1.11.1.min.js', '.'),
         (r'includes/android-chrome-192x192.png', '.'),
         (r'includes/android-chrome-512x512.png', '.'),
@@ -196,7 +200,7 @@ except Exception: # pylint: disable=broad-except
 os.chdir('./dist')
 
 # add localization stubs to make macOS translate the systems menu item and native dialogs
-for lang in ['ar', 'da', 'de','el','en','es','fa','fi','fr','gd', 'he','hu','id','it','ja','ko','lv', 'nl','no','pl','pt_BR','pt','sk', 'sv','th','tr','uk','vi','zh_CN','zh_TW']:
+for lang in ['ar', 'cs', 'da', 'de','el','en','es','fa','fi','fr','gd', 'he','hu','id','it','ja','ko','lv', 'nl','no','pl','pt_BR','pt','sk', 'sv','th','tr','uk','vi','zh_CN','zh_TW']:
     loc_dir = r'Artisan.app/Contents/Resources/' + lang + r'.lproj'
     subprocess.check_call(r'mkdir ' + loc_dir,shell = True)
     subprocess.check_call(r'touch ' + loc_dir + r'/Localizable.string',shell = True)

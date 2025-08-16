@@ -39,7 +39,7 @@ QTDIR = os.environ['QT_PATH']
 
 APP = ['artisan.py']
 
-SUPPORTED_LANGUAGES = ['ar', 'da', 'de','el','en','es','fa','fi','fr','gd', 'he','hu','id','it','ja','ko','lv', 'nl','no','pl','pt_BR','pt','sk', 'sv','th','tr','uk','vi','zh_CN','zh_TW']
+SUPPORTED_LANGUAGES = ['ar', 'cs', 'da', 'de','el','en','es','fa','fi','fr','gd', 'he','hu','id','it','ja','ko','lv', 'nl','no','pl','pt_BR','pt','sk', 'sv','th','tr','uk','vi','zh_CN','zh_TW']
 
 
 DATA_FILES:List[Tuple[str,List[str]]] = [
@@ -54,8 +54,12 @@ DATA_FILES:List[Tuple[str,List[str]]] = [
         r'includes/alarmclock.svg',
         r'includes/alarmclock.ttf',
         r'includes/alarmclock.woff',
+        r'includes/roboto-300.woff2',
+        r'includes/roboto-600.woff2',
+        r'includes/roboto-regular.woff2',
         r'includes/artisan.tpl',
         r'includes/scale_widget.tpl',
+        r'includes/fitty_patched.js',
         r'includes/bigtext.js',
         r'includes/jquery-1.11.1.min.js',
         r'includes/android-chrome-192x192.png',

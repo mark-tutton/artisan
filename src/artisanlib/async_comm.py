@@ -6,7 +6,7 @@
 # This program or module is free software: you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as published
 # by the Free Software Foundation, either version 2 of the License, or
-# version 3 of the License, or (at your option) any later versison. It is
+# version 3 of the License, or (at your option) any later version. It is
 # provided for educational purposes and is distributed in the hope that
 # it will be useful, but WITHOUT ANY WARRANTY; without even the implied
 # warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See
@@ -15,6 +15,7 @@
 # AUTHOR
 # Marko Luther, 2023
 
+import time
 import logging
 import asyncio
 
@@ -59,9 +60,10 @@ class AsyncLoopThread:
         self.__thread.start()
 
     def __del__(self) -> None:
-        self.__loop.call_soon_threadsafe(self.__loop.stop)
+        if not self.__loop.is_closed():
+            self.__loop.call_soon_threadsafe(self.__loop.stop) # pyrefly: ignore[bad-argument-type] # __loop.stop() might raise exception if __loop is closed
 #        self.__thread.join()
-# WARNING: we don't join and expect the clients running on this thread to stop themself
+# WARNING: we don't join and expect the clients running on this thread to stop them
 # (using self._running) to finally get rid of this thread to prevent hangs
 
     @property
@@ -149,8 +151,8 @@ class AsyncComm:
                 disconnected_handler:Optional[Callable[[], None]] = None) -> None:
         # internals
         self._asyncLoopThread: Optional[AsyncLoopThread]       = None # the asyncio AsyncLoopThread object
-        self._write_queue: 'Optional[asyncio.Queue[bytes]]'    = None # noqa: UP037 # quotes for Python3.8 # the write queue
-        self._running:bool                                     = False              # while True we keep running the thread
+        self._write_queue:  Optional[asyncio.Queue[bytes]]     = None # noqa: UP037 # quotes for Python3.8 # the write_queue
+        self._running:bool                                     = False              # while true we keep running the thread
 
         # connection
         self._host:str = host
@@ -250,15 +252,17 @@ class AsyncComm:
                 while message != b'':
                     await self.write(writer, message)
                     message = await queue.get()
+                # on empty messages we close the connection
+                writer.close()
         except Exception as e: # pylint: disable=broad-except
             _log.error(e)
         finally:
             with suppress(asyncio.CancelledError, ConnectionResetError):
                 await writer.drain()
 
-    # if serial settings are given, host/port are ignore and communication is handled by the given serial port
+    # if serial settings are given, the host/port settings are ignored and communication is handled by the given serial port
     async def connect(self, connect_timeout:float=5) -> None:
-        writer = None
+        writer:Optional[asyncio.StreamWriter] = None
         while self._running:
             try:
                 if self._serial is not None:
@@ -337,6 +341,8 @@ class AsyncComm:
     def stop(self) -> None:
         _log.debug('stop sampling')
         self._running = False
+        self.send(b'') # we write an empty byte to stop the writer and disconnect
+        time.sleep(0.3) # wait a moment to allow the loop to disconnect
         self._asyncLoopThread = None
         self._write_queue = None
         self.reset_readings()

@@ -24,7 +24,6 @@ from typing import Final, Optional, List, Set, Tuple, Dict, Callable, cast, Any,
 if TYPE_CHECKING:
     from artisanlib.main import ApplicationWindow # noqa: F401 # pylint: disable=unused-import
     from artisanlib.atypes import RecentRoast, BTU
-    from artisanlib.acaia import Acaia # noqa: F401 # pylint: disable=unused-import
     from plus.stock import Blend # noqa: F401  # pylint: disable=unused-import
     from PyQt6.QtWidgets import QLayout, QAbstractItemView, QCompleter # pylint: disable=unused-import
     from PyQt6.QtGui import QClipboard, QCloseEvent, QKeyEvent, QMouseEvent # pylint: disable=unused-import
@@ -68,10 +67,6 @@ except ImportError:
                                  QHBoxLayout, QVBoxLayout, QHeaderView, QLabel, QLineEdit, QTextEdit, QListView, # @UnusedImport @Reimport  @UnresolvedImport
                                  QPushButton, QSpinBox, QTableWidget, QTableWidgetItem, QTabWidget, QSizePolicy, # @UnusedImport @Reimport  @UnresolvedImport
                                  QGroupBox, QToolButton, QFrame) # @UnusedImport @Reimport  @UnresolvedImport
-#    try:
-#        from PyQt5 import sip # type: ignore # @Reimport @UnresolvedImport @UnusedImport
-#    except ImportError:
-#        import sip  # type: ignore # @Reimport @UnresolvedImport @UnusedImport
 
 
 ########################################################################################
@@ -89,7 +84,7 @@ class volumeCalculatorDlg(ArtisanDialog):
         self.setModal(True)
         self.setWindowTitle(QApplication.translate('Form Caption','Volume Calculator'))
 
-        if self.aw.scale.device is not None and self.aw.scale.device not in {'', 'None'}:
+        if self.aw.scale_manager.is_scale1_configured():
             self.scale_connected = True
         else:
             self.scale_connected = False
@@ -115,13 +110,11 @@ class volumeCalculatorDlg(ArtisanDialog):
         # Scale Weight
         self.scale_weight = self.parent_dialog.scale_weight
         self.scaleWeight = QLabel() # displays the current reading
-        if self.parent_dialog.acaia is not None:
+        if self.aw.scale_manager.is_scale1_configured():
             self.update_scale_weight()
-            self.parent_dialog.acaia.weight_changed_signal.connect(self.acaia_weight_changed)
-            self.parent_dialog.acaia.battery_changed_signal.connect(self.acaia_battery_changed)
-            self.parent_dialog.acaia.disconnected_signal.connect(self.acaia_disconnected)
-        # Scale Battery
-        self.scale_battery = self.parent_dialog.scale_battery
+            self.aw.scale_manager.scale1_weight_changed_signal.connect(self.scale_weight_changed)
+            self.aw.scale_manager.scale1_stable_weight_changed_signal.connect(self.scale_weight_changed)
+            self.aw.scale_manager.scale1_disconnected_signal.connect(self.scale_disconnected)
 
         # Unit Group
         unitvolumeLabel = QLabel('<b>' + QApplication.translate('Label','Unit') + '</b>')
@@ -322,22 +315,17 @@ class volumeCalculatorDlg(ArtisanDialog):
             self.aw.largeScaleLCDs_dialog.updateWeightUnit('g')
 
     @pyqtSlot()
-    def acaia_disconnected(self) -> None:
+    def scale_disconnected(self) -> None:
         self.scale_weight = None
-        self.scale_battery = None
         self.updateWeightLCD('----')
 
     def updateWeightLCD(self, txt_value:str, txt_unit:str = '') -> None:
-        if self.aw.scale.device is not None and self.aw.scale.device not in {'', 'None'}:
+        if self.aw.scale_manager.is_scale1_configured():
             self.scaleWeight.setText('' if txt_value == '' else txt_value+txt_unit.lower())
             self.aw.qmc.updateLargeScaleLCDs(txt_value)
 
     @pyqtSlot(int)
-    def acaia_battery_changed(self, b:int) -> None:
-        self.scale_battery = b
-
-    @pyqtSlot(float)
-    def acaia_weight_changed(self, w:float) -> None:
+    def scale_weight_changed(self, w:int) -> None:
         self.scale_weight = w
         self.update_scale_weight()
 
@@ -492,7 +480,7 @@ class volumeCalculatorDlg(ArtisanDialog):
 
 class RoastsComboBox(QComboBox): # pyright: ignore [reportGeneralTypeIssues] # Argument to class must be a base class
     def __init__(self, parent:QWidget, aw:'ApplicationWindow', selection:Optional[str] = None) -> None:
-        super().__init__(parent)
+        super().__init__(parent) # pyrefly: ignore[bad-argument-count]
         self.aw:ApplicationWindow = aw
         self.installEventFilter(self)
         self.selection:Optional[str] = selection # just the roast title
@@ -642,9 +630,7 @@ class editGraphDlg(ArtisanResizeablDialog):
         self.org_perKgRoastMode = self.aw.qmc.perKgRoastMode
         self.perKgRoastMode = self.aw.qmc.perKgRoastMode # if true only the amount during the roast and not the full batch (incl. preheat and BBP) are displayed), toggled by click on the result widget
 
-        self.acaia:'Optional[Acaia]' = None # the BLE interface # noqa: UP037
         self.scale_weight:Optional[float] = None # weight received from a connected scale
-        self.scale_battery:Optional[int] = None # battery level of the connected scale in %
         self.scale_set:Optional[float] = None # set weight for accumulation in g
 
         self.disconnecting = False # this is set to True to terminate the scale connection
@@ -671,6 +657,32 @@ class editGraphDlg(ArtisanResizeablDialog):
         self.template_uuid:Optional[str] = None
         self.template_batchnr:Optional[int] = None
         self.template_batchprefix:Optional[str] = None
+
+        # energy variables (explicitly define constructors)
+        self.curvenames:List[str] = []
+        self.org_gasMix:int = 0
+        self.org_electricEnergyMix:int = 0
+        self.org_betweenbatch_after_preheat:bool = True
+        self.org_coolingenergies:List[float] = [0.0]*4
+        self.org_coolingDuration:int = 0
+        self.org_betweenbatchenergies:List[float] = [0.0]*4
+        self.org_betweenbatchDuration:int = 0
+        self.org_preheatenergies:List[float] = [0.0]*4
+        self.org_preheatDuration:int = 0
+        self.org_metersources:List[int] = [0]*2
+        self.org_meterfuels:List[int] = [2]*2
+        self.org_meterunits:List[int] = [3]*2
+        self.org_meterlabels:List[str] = ['']*2
+        self.org_loadevent_hundpcts:List[int] = [100]*4
+        self.org_loadevent_zeropcts:List[int] = [0]*4
+        self.org_presssure_percents:List[bool] = [False]*4
+        self.org_load_etypes:List[int] = [0]*4
+        self.org_sourcetypes:List[int] = [0]*4
+        self.org_ratingunits:List[int] = [0]*4
+        self.org_loadratings:List[float] = [0.0]*4
+        self.org_loadlabels:List[str] = ['']*4
+        self.btu_list:List[BTU] = []
+        self.energy_ui:Any = None
 
         regextime = QRegularExpression(r'^-?[0-9]?[0-9]?[0-9]:[0-5][0-9]$')
         #MARKERS
@@ -708,7 +720,6 @@ class editGraphDlg(ArtisanResizeablDialog):
             t3 = 0
         self.Cstarteditcopy = stringfromseconds(t3)
         self.Cstartedit = QLineEdit(self.Cstarteditcopy)
-#        self.Cstartedit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.Cstartedit.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         self.Cstartedit.setValidator(QRegularExpressionValidator(regextime,self))
         self.Cstartedit.setMaximumWidth(50)
@@ -724,7 +735,6 @@ class editGraphDlg(ArtisanResizeablDialog):
             t4 = 0
         self.Cendeditcopy = stringfromseconds(t4)
         self.Cendedit = QLineEdit(self.Cendeditcopy)
-#        self.Cendedit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.Cendedit.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         self.Cendedit.setValidator(QRegularExpressionValidator(regextime,self))
         self.Cendedit.setMaximumWidth(50)
@@ -739,7 +749,6 @@ class editGraphDlg(ArtisanResizeablDialog):
             t5 = 0
         self.CCstarteditcopy = stringfromseconds(t5)
         self.CCstartedit = QLineEdit(self.CCstarteditcopy)
-#        self.CCstartedit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.CCstartedit.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         self.CCstartedit.setValidator(QRegularExpressionValidator(regextime,self))
         self.CCstartedit.setMaximumWidth(50)
@@ -769,7 +778,6 @@ class editGraphDlg(ArtisanResizeablDialog):
             t7 = 0
         self.dropeditcopy = stringfromseconds(t7)
         self.dropedit = QLineEdit(self.dropeditcopy)
-#        self.dropedit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.dropedit.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         self.dropedit.setValidator(QRegularExpressionValidator(regextime,self))
         self.dropedit.setMaximumWidth(50)
@@ -784,7 +792,6 @@ class editGraphDlg(ArtisanResizeablDialog):
             t8 = 0
         self.cooleditcopy = stringfromseconds(t8)
         self.cooledit = QLineEdit(self.cooleditcopy)
-#        self.cooledit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.cooledit.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         self.cooledit.setValidator(QRegularExpressionValidator(regextime,self))
         self.cooledit.setMaximumWidth(50)
@@ -899,6 +906,11 @@ class editGraphDlg(ArtisanResizeablDialog):
         batchlabel = ClickableQLabel('<b>' + QApplication.translate('Label', 'Batch') + '</b>')
         batchlabel.right_clicked.connect(self.enableBatchEdit)
         self.batchLayout = QHBoxLayout()
+        # editor
+        self.batchposSpinBox:Optional[QSpinBox] = None
+        self.batchcounterSpinBox:Optional[QSpinBox] = None
+        self.batchprefixedit:Optional[QLineEdit] = None
+        #
         if self.aw.superusermode: # and self.aw.qmc.batchcounter > -1:
             self.defineBatchEditor()
         else:
@@ -966,7 +978,7 @@ class editGraphDlg(ArtisanResizeablDialog):
 
         #defects
         dw = (self.aw.qmc.roasted_defects_weight if (self.aw.qmc.roasted_defects_mode or self.aw.qmc.roasted_defects_weight == 0) else
-            (0 if self.aw.qmc.weight[1] == 0 else min(self.aw.qmc.weight[1], max(0, self.aw.qmc.weight[1] - self.aw.qmc.roasted_defects_weight))))
+            (0 if self.aw.qmc.weight[1] == 0 else min(self.aw.qmc.weight[1], max(0.0, self.aw.qmc.weight[1] - self.aw.qmc.roasted_defects_weight))))
         defectsw = f'{float2floatWeightVolume(dw):g}'
         self.weightoutdefectsedit = QLineEdit()
         self.weightoutdefectsedit.setToolTip(QApplication.translate('Tooltip', 'weight of defects sorted from roasted coffee or weight of roasted coffee after defects have been removed'))
@@ -1251,7 +1263,7 @@ class editGraphDlg(ArtisanResizeablDialog):
 #        self.tareComboBox.setMaximumWidth(80)
         self.tareComboBox.setMinimumWidth(80)
         self.updateTarePopup(adjust_index=False)
-        self.tareComboBox.setCurrentIndex(self.aw.qmc.container_idx + 3)
+        self.tareComboBox.setCurrentIndex(self.aw.container1_idx + 3)
         self.tareComboBox.currentIndexChanged.connect(self.tareChanged)
 
         # in button
@@ -1292,18 +1304,6 @@ class editGraphDlg(ArtisanResizeablDialog):
 
         self.updateWeightOutDefectsLabel()
 
-        # scan whole button
-        scanWholeButton = QPushButton(QApplication.translate('Button', 'scan'))
-        scanWholeButton.clicked.connect(self.scanWholeColor)
-        scanWholeButton.setMinimumWidth(80)
-        #the size of Buttons on the Mac is too small with 70,30 and ok with sizeHint/minimumSizeHint
-        scanWholeButton.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        # scan ground button
-        scanGroundButton = QPushButton(QApplication.translate('Button', 'scan'))
-        scanGroundButton.setMinimumWidth(80)
-        scanGroundButton.clicked.connect(self.scanGroundColor)
-        #the size of Buttons on the Mac is too small with 70,30 and ok with sizeHint/minimumSizeHint
-        scanGroundButton.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         # Ambient Temperature Source Selector
         self.ambientComboBox = QComboBox()
         self.ambientComboBox.addItems(self.buildAmbientTemperatureSourceList())
@@ -1523,35 +1523,25 @@ class editGraphDlg(ArtisanResizeablDialog):
 
         propGrid.setColumnStretch(5,10)
 
-        if self.aw.scale.device is not None and self.aw.scale.device not in {'', 'None'}:
+        self.scale1_was_connected:bool = False
+
+
+        # we connect to scale1 if configured
+        if self.aw.scale_manager.is_scale1_configured():
+
             propGrid.addWidget(self.tareComboBox,1,6,1,2) # rowSpan=1, columnSpan=3
             propGrid.addLayout(inButtonLayout,1,8)
             propGrid.addLayout(outButtonLayout,1,9)
             propGrid.addLayout(defectsButtonLayout,2,9)
 
+            # remember connection state of scale (only scale1 of scale_manager is supported here!)
+            self.scale1_was_connected = self.aw.scale_manager.is_scale1_connected()
+            self.aw.scale_manager.scale1_weight_changed_signal.connect(self.scale_weight_changed)
+            self.aw.scale_manager.scale1_stable_weight_changed_signal.connect(self.scale_weight_changed)
+            self.aw.scale_manager.scale1_disconnected_signal.connect(self.scale_disconnected)
 
-            if self.aw.scale.device == 'acaia' and not (platform.system() == 'Windows' and math.floor(toFloat(platform.release())) < 10):
-                # BLE is not well supported under Windows versions before Windows 10
-                try:
-                    from artisanlib.acaia import Acaia
-                    self.acaia = Acaia(
-                        model = 1,
-                        ident = None,
-                        name = 'Acaia',
-                        connected_handler=lambda : self.aw.sendmessageSignal.emit(QApplication.translate('Message', '{} connected').format('Acaia'),True,None),
-                        disconnected_handler=lambda : self.aw.sendmessageSignal.emit(QApplication.translate('Message', '{} disconnected').format('Acaia'),True,None))
-                    self.acaia.weight_changed_signal.connect(self.ble_weight_changed)
-                    self.acaia.battery_changed_signal.connect(self.ble_battery_changed)
-                    self.acaia.disconnected_signal.connect(self.ble_disconnected)
-                    # start BLE loop
-                    self.acaia.connect_scale()
-
-                    self.updateWeightLCD('----')
-                except Exception as e:  # pylint: disable=broad-except
-                    _log.exception(e)
-            elif self.aw.scale.device in {'KERN NDE','Shore 930'}:
-                self.connectScaleSignal.connect(self.connectScaleLoop)
-                QTimer.singleShot(2,lambda : self.connectScaleSignal.emit()) # pylint: disable= unnecessary-lambda
+            self.aw.scale_manager.connect_scale1_slot()
+            self.updateWeightLCD('----')
 
         propGrid.setRowMinimumHeight(3,volumeCalcButton.minimumSizeHint().height())
         propGrid.addWidget(volumelabel,3,0,Qt.AlignmentFlag.AlignVCenter)
@@ -1597,11 +1587,6 @@ class editGraphDlg(ArtisanResizeablDialog):
         propGrid.addWidget(self.whole_color_edit,8,1,Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter)
         propGrid.addWidget(self.ground_color_edit,8,2,Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter)
         propGrid.addWidget(self.colorSystemComboBox,8,3,1,2) # rowSpan=1, columnSpan=2
-
-        if self.aw.color.device is not None and self.aw.color.device != '' and self.aw.color.device not in ['None','Tiny Tonino', 'Classic Tonino']:
-            propGrid.addWidget(scanWholeButton,8,6)
-        if self.aw.color.device not in (None, '', 'None'):
-            propGrid.addWidget(scanGroundButton,8,7)
 
         propGrid.addWidget(ambientSourceLabel,8,8,1,2,Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom)
 
@@ -1862,7 +1847,7 @@ class editGraphDlg(ArtisanResizeablDialog):
 ##
 
     def updateWeightLCD(self, txt_value:str, txt_unit:str = '', total:Optional[float] = None) -> None:
-        if self.aw.scale.device is not None and self.aw.scale.device not in {'', 'None'}:
+        if self.aw.scale_manager.is_scale1_configured():
             self.scaleWeight.setText(txt_value+txt_unit.lower())
             total_txt, unit = self.updateScaleWeightAccumulated(total)
             self.scaleWeightAccumulated.setText(total_txt + unit.lower())
@@ -1923,44 +1908,6 @@ class editGraphDlg(ArtisanResizeablDialog):
         self.batchLayout.addWidget(self.batchcounterSpinBox)
         self.batchLayout.addWidget(self.batchposSpinBox)
 
-    @pyqtSlot()
-    def readScale(self) -> None:
-        if self.disconnecting:
-            self.aw.scale.closeport()
-            self.scale_weight = None
-            self.scale_battery = None
-        elif self.aw.scale.SP is None or not self.aw.scale.SP.is_open:
-            self.connectScaleSignal.emit()
-        else:
-            w,_,_ = self.aw.scale.readWeight()
-            if w != -1:
-                self.scale_weight = w
-            else:
-                self.scale_weight = None
-            self.update_scale_weight()
-            if self.volumedialog is not None:
-                self.scaleWeightUpdated.emit(w)
-            self.readScaleSignal.emit()
-
-    @pyqtSlot()
-    def readScaleLoop(self) -> None:
-        QTimer.singleShot(1000,self.readScale)
-
-    @pyqtSlot()
-    def connectScaleLoop(self) -> None:
-        QTimer.singleShot(2000,self.connectScale)
-
-    @pyqtSlot()
-    def connectScale(self) -> None:
-        if self.disconnecting:
-            self.aw.scale.closeport()
-        else:
-            res = self.aw.scale.connect(error=False)
-            if res:
-                self.readScaleSignal.connect(self.readScaleLoop)
-                QTimer.singleShot(2,lambda : self.readScaleSignal.emit()) # pylint: disable= unnecessary-lambda
-            else:
-                self.connectScaleSignal.emit()
 
     @pyqtSlot()
     def resetScaleSet(self) -> None:
@@ -1989,21 +1936,15 @@ class editGraphDlg(ArtisanResizeablDialog):
         return v_formatted, unit
 
     @pyqtSlot()
-    def ble_disconnected(self) -> None:
+    def scale_disconnected(self) -> None:
         self.scale_weight = None
-        self.scale_battery = None
         self.updateWeightLCD('----')
 
-    @pyqtSlot(float)
-    def ble_weight_changed(self, w:float) -> None:
+    @pyqtSlot(int)
+    def scale_weight_changed(self, w:int) -> None:
+        _log.debug('PRINT RP:scale_weight_changed(%s)',w)
         if w is not None:
             self.scale_weight = w
-            self.update_scale_weight()
-
-    @pyqtSlot(int)
-    def ble_battery_changed(self, b:int) -> None:
-        if b is not None:
-            self.scale_battery = b
             self.update_scale_weight()
 
     def update_scale_weight(self) -> None:
@@ -2029,7 +1970,7 @@ class editGraphDlg(ArtisanResizeablDialog):
                 v = convertWeight(v,0,weight_units.index(self.aw.qmc.weight[2]))
                 v_formatted = f'{v:.2f}'
             self.updateWeightLCD(v_formatted, self.aw.qmc.weight[2].lower(), self.scale_weight - tare)
-        elif self.aw.scale.device is not None and self.aw.scale.device not in {'', 'None'}:
+        elif self.aw.scale_manager.is_scale1_configured():
             self.updateWeightLCD('----')
 
     def updateTemplateLine(self) -> None:
@@ -2490,7 +2431,7 @@ class editGraphDlg(ArtisanResizeablDialog):
                 if 'ratio_denom' in i and i['ratio_denom'] is not None:
                     entry['ratio_denom'] = i['ratio_denom']
                 ingredients.append(entry)
-            self.plus_blend_selected_spec['ingredients'] = ingredients
+            self.plus_blend_selected_spec['ingredients'] = ingredients # pyrefly: ignore[unsupported-operation]
             self.plus_amount_selected = plus.stock.getBlendMaxAmount(selected_blend)
             self.plus_amount_replace_selected = plus.stock.getBlendReplaceMaxAmount(selected_blend)
             self.fillBlendData(selected_blend,prev_coffee_label,prev_blend_label)
@@ -2798,19 +2739,22 @@ class editGraphDlg(ArtisanResizeablDialog):
     # called on CANCEL and WindowClose from closeEvent(), and on OK from accept()
     def clean_up(self) -> None:
         self.disconnecting = True
-        if self.acaia is not None:
+
+        if self.aw.scale_manager.is_scale1_configured():
+            # disconnect from scale_manager signals
             try:
-                self.acaia.battery_changed_signal.disconnect()
-                self.acaia.weight_changed_signal.disconnect()
-                self.acaia.disconnected_signal.disconnect()
+                self.aw.scale_manager.scale1_weight_changed_signal.disconnect(self.scale_weight_changed)
+                self.aw.scale_manager.scale1_stable_weight_changed_signal.disconnect(self.scale_weight_changed)
+                self.aw.scale_manager.scale1_disconnected_signal.disconnect(self.scale_disconnected)
             except Exception as e: # pylint: disable=broad-except
-                _log.exception(e)
+                _log.error(e)
             try:
-                self.acaia.disconnect_scale()
-                self.updateWeightLCD('')
+                # disconnect scales if they were not connected before
+                if not self.scale1_was_connected:
+                    self.aw.scale_manager.disconnect_scale1_signal.emit()
             except Exception as e: # pylint: disable=broad-except
-                _log.exception(e)
-            self.acaia = None
+                _log.error(e)
+
         settings = QSettings()
         #save window geometry
         settings.setValue('RoastGeometry',self.saveGeometry())
@@ -2841,7 +2785,7 @@ class editGraphDlg(ArtisanResizeablDialog):
             if event.matches(QKeySequence.StandardKey.Copy) and self.TabWidget.currentIndex() == 3: # datatable
                 self.aw.copy_cells_to_clipboard(self.datatable,adjustment=1)
                 self.aw.sendmessage(QApplication.translate('Message','Data table copied to clipboard'))
-            if key == 16777220 and self.aw.scale.device not in (None, '', 'None'): # ENTER key pressed and scale connected
+            if key == 16777220 and self.aw.scale_manager.is_scale1_configured(): # ENTER key pressed and scale connected
                 if self.weightinedit.hasFocus():
                     self.inWeight(True,overwrite=True) # we don't add to current reading but overwrite
                 elif self.weightoutedit.hasFocus():
@@ -2882,12 +2826,13 @@ class editGraphDlg(ArtisanResizeablDialog):
         if adjust_index:
             if self.tareComboBox.count() > prev_item_count:
                 # if item list is longer (new items added), we select the last item
-                self.aw.qmc.container_idx = self.tareComboBox.count() - 4
-            if len(self.aw.qmc.container_weights) > self.aw.qmc.container_idx:
-                self.tareComboBox.setCurrentIndex(self.container_menu_idx(self.aw.qmc.container_idx))
+                self.aw.container1_idx = self.tareComboBox.count() - 4
+            if len(self.aw.qmc.container_weights) > self.aw.container1_idx:
+                self.tareComboBox.setCurrentIndex(self.container_menu_idx(self.aw.container1_idx))
             else:
                 self.tareComboBox.setCurrentIndex(2) # reset to the empty entry
-                self.aw.qmc.container_idx = -1
+                self.aw.container1_idx = -1
+
 
     @pyqtSlot(int)
     def tareChanged(self, i:int) -> None:
@@ -2895,9 +2840,9 @@ class editGraphDlg(ArtisanResizeablDialog):
             tareDLG = tareDlg(self,self.aw, self.get_scale_weight)
             tareDLG.tare_updated_signal.connect(self.updateTarePopup)
             tareDLG.show()
-            self.tareComboBox.setCurrentIndex(self.aw.qmc.container_idx + 3)
+            self.tareComboBox.setCurrentIndex(self.aw.container1_idx + 3)
         else:
-            self.aw.qmc.container_idx = i - 3
+            self.aw.container1_idx = i - 3
             # update displayed scale weight
             self.update_scale_weight()
 
@@ -2981,7 +2926,7 @@ class editGraphDlg(ArtisanResizeablDialog):
             self.energy_ui = EnergyWidget.Ui_EnergyWidget()
             self.energy_ui.setupUi(self.C5Widget)
 
-            self.btu_list:List[BTU] = []
+            self.btu_list = []
 
             # remember parameters to enable a Cancel action
             self.org_loadlabels = self.aw.qmc.loadlabels.copy()
@@ -3853,7 +3798,7 @@ class editGraphDlg(ArtisanResizeablDialog):
     @pyqtSlot()
     def loadlabels_editingfinished(self) -> None:
         w = self.sender()
-        if w and isinstance(w, QLineEdit) and w.isModified():
+        if w and isinstance(w, QLineEdit) and w.isModified(): # pyrefly: ignore[invalid-argument]
             w.setText(w.text().strip())
             self.updateLoadLabels()
             self.loadsEdited()
@@ -3861,7 +3806,7 @@ class editGraphDlg(ArtisanResizeablDialog):
     @pyqtSlot()
     def loadratings_editingfinished(self) -> None:
         w = self.sender()
-        if w and isinstance(w, QLineEdit) and w.isModified():
+        if w and isinstance(w, QLineEdit) and w.isModified(): # pyrefly: ignore[invalid-argument]
             w.setText(self.validateNumText(w.text()))
             self.updateLoadRatings()
             self.updateEnergyLabels()
@@ -3870,7 +3815,7 @@ class editGraphDlg(ArtisanResizeablDialog):
     @pyqtSlot()
     def ratingunits_currentindexchanged(self) -> None:
         sender = self.sender()
-        if isinstance(sender, QComboBox):
+        if isinstance(sender, QComboBox): # pyrefly: ignore[invalid-argument]
             try:
                 i = [self.energy_ui.ratingunit0,self.energy_ui.ratingunit1,self.energy_ui.ratingunit2,self.energy_ui.ratingunit3].index(sender)
                 self.aw.qmc.ratingunits[i] = sender.currentIndex()
@@ -3883,7 +3828,7 @@ class editGraphDlg(ArtisanResizeablDialog):
     @pyqtSlot()
     def sourcetypes_currentindexchanged(self) -> None:
         sender = self.sender()
-        if isinstance(sender, QComboBox):
+        if isinstance(sender, QComboBox): # pyrefly: ignore[invalid-argument]
             try:
                 i = [self.energy_ui.sourcetype0, self.energy_ui.sourcetype1, self.energy_ui.sourcetype2, self.energy_ui.sourcetype3].index(sender)
                 self.aw.qmc.sourcetypes[i] = sender.currentIndex()
@@ -3895,7 +3840,7 @@ class editGraphDlg(ArtisanResizeablDialog):
     @pyqtSlot()
     def load_etypes_currentindexchanged(self) -> None:
         sender = self.sender()
-        if isinstance(sender, QComboBox):
+        if isinstance(sender, QComboBox): # pyrefly: ignore[invalid-argument]
             try:
                 i = [self.energy_ui.events0, self.energy_ui.events1, self.energy_ui.events2, self.energy_ui.events3].index(sender)
                 self.aw.qmc.load_etypes[i] = sender.currentIndex()
@@ -3909,7 +3854,7 @@ class editGraphDlg(ArtisanResizeablDialog):
     @pyqtSlot(int)
     def pressureCheckBox_statechanged(self, _:int) -> None:
         sender = self.sender()
-        if isinstance(sender, QCheckBox):
+        if isinstance(sender, QCheckBox): # pyrefly: ignore[invalid-argument]
             try:
                 i = [self.energy_ui.pressureCheckBox0, self.energy_ui.pressureCheckBox1, self.energy_ui.pressureCheckBox2, self.energy_ui.pressureCheckBox3].index(sender)
                 self.aw.qmc.presssure_percents[i] = sender.isChecked()
@@ -3969,7 +3914,7 @@ class editGraphDlg(ArtisanResizeablDialog):
     @pyqtSlot()
     def meterlabels_editingfinished(self) -> None:
         w = self.sender()
-        if w and isinstance(w, QLineEdit) and w.isModified():
+        if w and isinstance(w, QLineEdit) and w.isModified(): # pyrefly: ignore[invalid-argument]
             w.setText(w.text().strip())
             self.updateMeterLabels()
             self.loadsEdited()
@@ -3977,7 +3922,7 @@ class editGraphDlg(ArtisanResizeablDialog):
     @pyqtSlot()
     def meterunits_currentindexchanged(self) -> None:
         sender = self.sender()
-        if isinstance(sender, QComboBox):
+        if isinstance(sender, QComboBox):# pyrefly: ignore[invalid-argument]
             try:
                 i = [self.energy_ui.meter1UnitComboBox,self.energy_ui.meter2UnitComboBox].index(sender)
                 self.aw.qmc.meterunits[i] = sender.currentIndex()
@@ -3991,7 +3936,7 @@ class editGraphDlg(ArtisanResizeablDialog):
     @pyqtSlot()
     def meterfuels_currentindexchanged(self) -> None:
         sender = self.sender()
-        if isinstance(sender, QComboBox):
+        if isinstance(sender, QComboBox):# pyrefly: ignore[invalid-argument]
             try:
                 i = [self.energy_ui.meter1FuelComboBox,self.energy_ui.meter2FuelComboBox].index(sender)
                 self.aw.qmc.meterfuels[i] = sender.currentIndex()
@@ -4004,7 +3949,7 @@ class editGraphDlg(ArtisanResizeablDialog):
     @pyqtSlot()
     def metersources_currentindexchanged(self) -> None:
         sender = self.sender()
-        if isinstance(sender, QComboBox):
+        if isinstance(sender, QComboBox): # pyrefly: ignore[invalid-argument]
             try:
                 i = [self.energy_ui.meter1SourceComboBox,self.energy_ui.meter2SourceComboBox].index(sender)
                 self.aw.qmc.metersources[i] = sender.currentIndex()
@@ -4323,21 +4268,6 @@ class editGraphDlg(ArtisanResizeablDialog):
         self.pressureedit.repaint() # seems to be necessary in some PyQt versions!?
 
     @pyqtSlot(bool)
-    def scanWholeColor(self, _:bool = False) -> None:
-        v = self.aw.color.readColor()
-        if v is not None and v > -1 and 0 <= v <= 250:
-            self.aw.qmc.whole_color = v
-            self.whole_color_edit.setText(str(v))
-
-    @pyqtSlot(bool)
-    def scanGroundColor(self, _:bool = False) -> None:
-        v = self.aw.color.readColor()
-        if v is not None and v > -1:
-            v = max(0,min(250,v))
-            self.aw.qmc.ground_color = v
-            self.ground_color_edit.setText(str(v))
-
-    @pyqtSlot(bool)
     def volumeCalculatorTimer(self, _:bool = False) -> None:
         QTimer.singleShot(1, self.volumeCalculator)
 
@@ -4394,7 +4324,6 @@ class editGraphDlg(ArtisanResizeablDialog):
                 tare = self.aw.qmc.container_weights[tare_idx]
         except Exception: # pylint: disable=broad-except
             pass
-        #w,d,m = self.aw.scale.readWeight(self.scale_weight) # read value from scale in 'g'
         w = self.scale_weight
         d,m = -1,-1
         if w is not None and w > -1:
@@ -4443,6 +4372,7 @@ class editGraphDlg(ArtisanResizeablDialog):
     @pyqtSlot(int)
     def labelOriginFlagChanged(self, _:int = 0) -> None:
         plus.stock.coffee_label_normal_order = self.label_origin_flag.isChecked()
+        plus.stock.clearStockCaches() # we need to clear the stock caches to receive the updated coffee labels
         self.populatePlusCoffeeBlendCombos()  # update the plus stock popups to display the correct bean label format
 
     @pyqtSlot(int)
@@ -5057,9 +4987,9 @@ class editGraphDlg(ArtisanResizeablDialog):
         except Exception: # pylint: disable=broad-except
             pass
         if weight_out > 0:
-            defects = min(weight_out, max(0, defects)) # 0 <= defects <= weight_out
+            defects = min(weight_out, max(0.0, defects)) # 0 <= defects <= weight_out
         else:
-            defects = min(weight_in, max(0, defects)) # 0 <= defects <= weight_in
+            defects = min(weight_in, max(0.0, defects)) # 0 <= defects <= weight_in
         dw_txt = f'{float2floatWeightVolume(defects):g}'
         if self.aw.qmc.roasted_defects_mode or dw_txt != '0':
             self.weightoutdefectsedit.setText(dw_txt)
@@ -5416,27 +5346,30 @@ class editGraphDlg(ArtisanResizeablDialog):
             self.aw.qmc.timeindex[0] = -1
         elif self.chargeeditcopy != str(self.chargeedit.text()):
             #if there is a CHARGE recorded and the time entered is positive. Use relative time
-            if stringtoseconds(str(self.chargeedit.text())) > 0 and self.aw.qmc.timeindex[0] != -1:
-                startindex = self.aw.qmc.time2index(self.aw.qmc.timex[self.aw.qmc.timeindex[0]] + stringtoseconds(str(self.chargeedit.text())))
-                timeindex_before = self.aw.qmc.timeindex[0]
-                self.aw.qmc.timeindex[0] = max(-1,startindex)
-                self.aw.qmc.startofx += (self.aw.qmc.timex[self.aw.qmc.timeindex[0]] - self.aw.qmc.timex[timeindex_before])
-            #if there is a CHARGE recorded and the time entered is negative. Use relative time
-            elif stringtoseconds(str(self.chargeedit.text())) < 0 and self.aw.qmc.timeindex[0] != -1:
-                relativetime = self.aw.qmc.timex[self.aw.qmc.timeindex[0]]-abs(stringtoseconds(str(self.chargeedit.text())))
-                startindex = self.aw.qmc.time2index(relativetime)
-                timeindex_before = self.aw.qmc.timeindex[0]
-                self.aw.qmc.timeindex[0] = max(-1,startindex)
-                self.aw.qmc.startofx += (self.aw.qmc.timex[self.aw.qmc.timeindex[0]] - self.aw.qmc.timex[timeindex_before])
-            #if there is _no_ CHARGE recorded and the time entered is positive. Use absolute time
-            elif stringtoseconds(str(self.chargeedit.text())) > 0 and self.aw.qmc.timeindex[0] == -1:
-                startindex = self.aw.qmc.time2index(stringtoseconds(str(self.chargeedit.text())))
-                self.aw.qmc.timeindex[0] = max(-1,startindex)
-                self.aw.qmc.startofx += self.aw.qmc.timex[self.aw.qmc.timeindex[0]]
-            #if there is _no_ CHARGE recorded and the time entered is negative. ERROR
-            elif stringtoseconds(str(self.chargeedit.text())) < 0 and self.aw.qmc.timeindex[0] == -1:
-                self.aw.qmc.adderror(QApplication.translate('Error Message', 'Unable to move CHARGE to a value that does not exist'))
-            self.chargeeditcopy = str(self.chargeedit.text())
+            try:
+                if stringtoseconds(str(self.chargeedit.text())) > 0 and self.aw.qmc.timeindex[0] != -1:
+                    startindex = self.aw.qmc.time2index(self.aw.qmc.timex[self.aw.qmc.timeindex[0]] + stringtoseconds(str(self.chargeedit.text())))
+                    timeindex_before = self.aw.qmc.timeindex[0]
+                    self.aw.qmc.timeindex[0] = max(-1,startindex)
+                    self.aw.qmc.startofx += (self.aw.qmc.timex[self.aw.qmc.timeindex[0]] - self.aw.qmc.timex[timeindex_before])
+                #if there is a CHARGE recorded and the time entered is negative. Use relative time
+                elif stringtoseconds(str(self.chargeedit.text())) < 0 and self.aw.qmc.timeindex[0] != -1:
+                    relativetime = self.aw.qmc.timex[self.aw.qmc.timeindex[0]]-abs(stringtoseconds(str(self.chargeedit.text())))
+                    startindex = self.aw.qmc.time2index(relativetime)
+                    timeindex_before = self.aw.qmc.timeindex[0]
+                    self.aw.qmc.timeindex[0] = max(-1,startindex)
+                    self.aw.qmc.startofx += (self.aw.qmc.timex[self.aw.qmc.timeindex[0]] - self.aw.qmc.timex[timeindex_before])
+                #if there is _no_ CHARGE recorded and the time entered is positive. Use absolute time
+                elif stringtoseconds(str(self.chargeedit.text())) > 0 and self.aw.qmc.timeindex[0] == -1:
+                    startindex = self.aw.qmc.time2index(stringtoseconds(str(self.chargeedit.text())))
+                    self.aw.qmc.timeindex[0] = max(-1,startindex)
+                    self.aw.qmc.startofx += self.aw.qmc.timex[self.aw.qmc.timeindex[0]]
+                #if there is _no_ CHARGE recorded and the time entered is negative. ERROR
+                elif stringtoseconds(str(self.chargeedit.text())) < 0 and self.aw.qmc.timeindex[0] == -1:
+                    self.aw.qmc.adderror(QApplication.translate('Error Message', 'Unable to move CHARGE to a value that does not exist'))
+                self.chargeeditcopy = str(self.chargeedit.text())
+            except Exception: # pylint: disable=broad-except
+                pass # invalid input can make stringtoseconds fail
         # check CHARGE (with index self.aw.qmc.timeindex[0])
         start: float
         if self.aw.qmc.timeindex[0] == -1:
@@ -5444,61 +5377,82 @@ class editGraphDlg(ArtisanResizeablDialog):
         else:
             start = self.aw.qmc.timex[self.aw.qmc.timeindex[0]]
         if self.dryeditcopy != str(self.dryedit.text()):
-            s = stringtoseconds(str(self.dryedit.text()))
-            if s <= 0:
-                self.aw.qmc.timeindex[1] = 0
-            else:
-                dryindex = self.aw.qmc.time2index(start + s)
-                self.aw.qmc.timeindex[1] = max(0,dryindex)
-            self.dryeditcopy = str(self.dryedit.text())
+            try:
+                s = stringtoseconds(str(self.dryedit.text()))
+                if s <= 0:
+                    self.aw.qmc.timeindex[1] = 0
+                else:
+                    dryindex = self.aw.qmc.time2index(start + s)
+                    self.aw.qmc.timeindex[1] = max(0,dryindex)
+                self.dryeditcopy = str(self.dryedit.text())
+            except Exception: # pylint: disable=broad-except
+                pass # invalid input can make stringtoseconds fail
         if self.Cstarteditcopy != str(self.Cstartedit.text()):
-            s = stringtoseconds(str(self.Cstartedit.text()))
-            if s <= 0:
-                self.aw.qmc.timeindex[2] = 0
-            else:
-                fcsindex = self.aw.qmc.time2index(start + s)
-                self.aw.qmc.timeindex[2] = max(0,fcsindex)
-            self.Cstarteditcopy = str(self.Cstartedit.text())
+            try:
+                s = stringtoseconds(str(self.Cstartedit.text()))
+                if s <= 0:
+                    self.aw.qmc.timeindex[2] = 0
+                else:
+                    fcsindex = self.aw.qmc.time2index(start + s)
+                    self.aw.qmc.timeindex[2] = max(0,fcsindex)
+                self.Cstarteditcopy = str(self.Cstartedit.text())
+            except Exception: # pylint: disable=broad-except
+                pass # invalid input can make stringtoseconds fail
         if self.Cendeditcopy != str(self.Cendedit.text()):
-            s = stringtoseconds(str(self.Cendedit.text()))
-            if s <= 0:
-                self.aw.qmc.timeindex[3] = 0
-            else:
-                fceindex = self.aw.qmc.time2index(start + s)
-                self.aw.qmc.timeindex[3] = max(0,fceindex)
-            self.Cendeditcopy = str(self.Cendedit.text())
+            try:
+                s = stringtoseconds(str(self.Cendedit.text()))
+                if s <= 0:
+                    self.aw.qmc.timeindex[3] = 0
+                else:
+                    fceindex = self.aw.qmc.time2index(start + s)
+                    self.aw.qmc.timeindex[3] = max(0,fceindex)
+                self.Cendeditcopy = str(self.Cendedit.text())
+            except Exception: # pylint: disable=broad-except
+                pass # invalid input can make stringtoseconds fail
         if self.CCstarteditcopy != str(self.CCstartedit.text()):
-            s = stringtoseconds(str(self.CCstartedit.text()))
-            if s <= 0:
-                self.aw.qmc.timeindex[4] = 0
-            else:
-                scsindex = self.aw.qmc.time2index(start + s)
-                self.aw.qmc.timeindex[4] = max(0,scsindex)
-            self.CCstarteditcopy = str(self.CCstartedit.text())
+            try:
+                s = stringtoseconds(str(self.CCstartedit.text()))
+                if s <= 0:
+                    self.aw.qmc.timeindex[4] = 0
+                else:
+                    scsindex = self.aw.qmc.time2index(start + s)
+                    self.aw.qmc.timeindex[4] = max(0,scsindex)
+                self.CCstarteditcopy = str(self.CCstartedit.text())
+            except Exception: # pylint: disable=broad-except
+                pass # invalid input can make stringtoseconds fail
         if self.CCendeditcopy != str(self.CCendedit.text()):
-            s = stringtoseconds(str(self.CCendedit.text()))
-            if s <= 0:
-                self.aw.qmc.timeindex[5] = 0
-            elif stringtoseconds(str(self.CCendedit.text())) > 0:
-                sceindex = self.aw.qmc.time2index(start + s)
-                self.aw.qmc.timeindex[5] = max(0,sceindex)
-            self.CCendeditcopy = str(self.CCendedit.text())
+            try:
+                s = stringtoseconds(str(self.CCendedit.text()))
+                if s <= 0:
+                    self.aw.qmc.timeindex[5] = 0
+                elif stringtoseconds(str(self.CCendedit.text())) > 0:
+                    sceindex = self.aw.qmc.time2index(start + s)
+                    self.aw.qmc.timeindex[5] = max(0,sceindex)
+                self.CCendeditcopy = str(self.CCendedit.text())
+            except Exception: # pylint: disable=broad-except
+                pass # invalid input can make stringtoseconds fail
         if self.dropeditcopy != str(self.dropedit.text()):
-            s = stringtoseconds(str(self.dropedit.text()))
-            if s <= 0:
-                self.aw.qmc.timeindex[6] = 0
-            else:
-                dropindex = self.aw.qmc.time2index(start + s)
-                self.aw.qmc.timeindex[6] = max(0,dropindex)
-            self.dropeditcopy = str(self.dropedit.text())
+            try:
+                s = stringtoseconds(str(self.dropedit.text()))
+                if s <= 0:
+                    self.aw.qmc.timeindex[6] = 0
+                else:
+                    dropindex = self.aw.qmc.time2index(start + s)
+                    self.aw.qmc.timeindex[6] = max(0,dropindex)
+                self.dropeditcopy = str(self.dropedit.text())
+            except Exception: # pylint: disable=broad-except
+                pass # invalid input can make stringtoseconds fail
         if self.cooleditcopy != str(self.cooledit.text()):
-            s = stringtoseconds(str(self.cooledit.text()))
-            if s <= 0:
-                self.aw.qmc.timeindex[7] = 0
-            else:
-                coolindex = self.aw.qmc.time2index(start + s)
-                self.aw.qmc.timeindex[7] = max(0,coolindex)
-            self.cooleditcopy = str(self.cooledit.text())
+            try:
+                s = stringtoseconds(str(self.cooledit.text()))
+                if s <= 0:
+                    self.aw.qmc.timeindex[7] = 0
+                else:
+                    coolindex = self.aw.qmc.time2index(start + s)
+                    self.aw.qmc.timeindex[7] = max(0,coolindex)
+                self.cooleditcopy = str(self.cooledit.text())
+            except Exception: # pylint: disable=broad-except
+                pass # invalid input can make stringtoseconds fail
         if self.aw.qmc.phasesbuttonflag:
             # adjust phases by DryEnd and FCs events
             if self.aw.qmc.timeindex[1]:
@@ -5523,7 +5477,7 @@ class editGraphDlg(ArtisanResizeablDialog):
         # Update Title
         self.aw.qmc.title = ' '.join(self.titleedit.currentText().split())
         self.aw.qmc.title_show_always = self.titleShowAlwaysFlag.isChecked()
-        self.aw.qmc.container_idx = self.tareComboBox.currentIndex() - 3
+        self.aw.container1_idx = self.tareComboBox.currentIndex() - 3
 
 #PLUS
         # Update Plus
@@ -5585,7 +5539,7 @@ class editGraphDlg(ArtisanResizeablDialog):
             self.aw.qmc.roasted_defects_weight = 0
         else:
             # we interpret dw as yield
-            self.aw.qmc.roasted_defects_weight = min(w1, max(0, w1 - dw))
+            self.aw.qmc.roasted_defects_weight = min(w1, max(0.0, w1 - dw))
 
         # max 140kg green; roasted < green:
         if w2 == 'kg':
@@ -5706,9 +5660,12 @@ class editGraphDlg(ArtisanResizeablDialog):
         self.aw.qmc.roastingnotes = self.roastingeditor.toPlainText()
         self.aw.qmc.cuppingnotes = self.cuppingeditor.toPlainText()
         if self.aw.superusermode or self.batcheditmode:
-            self.aw.qmc.roastbatchprefix = self.batchprefixedit.text()
-            self.aw.qmc.roastbatchnr = self.batchcounterSpinBox.value()
-            self.aw.qmc.roastbatchpos = self.batchposSpinBox.value()
+            if self.batchprefixedit is not None:
+                self.aw.qmc.roastbatchprefix = self.batchprefixedit.text()
+            if self.batchcounterSpinBox is not None:
+                self.aw.qmc.roastbatchnr = self.batchcounterSpinBox.value()
+            if self.batchposSpinBox is not None:
+                self.aw.qmc.roastbatchpos = self.batchposSpinBox.value()
 
         self.aw.qmc.perKgRoastMode = self.perKgRoastMode
 
@@ -5864,17 +5821,6 @@ class editGraphDlg(ArtisanResizeablDialog):
         if layout is not None:
             layout.setSpacing(5)
         dialog.setFixedHeight(dialog.sizeHint().height())
-#        res = dialog.exec()
-#        #deleteLater() will not work here as the dialog is still bound via the parent
-#        #dialog.deleteLater() # now we explicitly allow the dialog an its widgets to be GCed
-#        # the following will immediately release the memory despite this parent link
-#        QApplication.processEvents() # we ensure events concerning this dialog are processed before deletion
-#        try: # sip not supported on older PyQt versions (RPi!)
-#            sip.delete(dialog)
-#            #print(sip.isdeleted(dialog))
-#        except Exception: # pylint: disable=broad-except
-#            pass
-#        return res
         return dialog.exec()
 
 class StockComboBox(MyQComboBox):
@@ -5913,7 +5859,7 @@ class CoffeesComboBox(StockComboBox):
         super().__init__(parent.unitsComboBox, *args, **kwargs)
         self.parentDialog = parent
 
-    def getItems(self, unit:int) -> List[str]:
+    def getItems(self, unit:int) -> List[str]:  # pyrefly: ignore[bad-override]
         plus_coffees = plus.stock.getCoffees(unit, self.parentDialog.plus_default_store)
         return [''] + plus.stock.getCoffeesLabels(plus_coffees)
 
@@ -5922,7 +5868,7 @@ class BlendsComboBox(StockComboBox):
         super().__init__(parent.unitsComboBox, *args, **kwargs)
         self.parentDialog:editGraphDlg = parent
 
-    def getItems(self, unit:int) -> List[str]:
+    def getItems(self, unit:int) -> List[str]: # pyrefly: ignore[bad-override]
         custom_blend:Optional[plus.stock.Blend] = None
         if self.parentDialog.aw.qmc.plus_custom_blend is not None and self.parentDialog.aw.qmc.plus_custom_blend.name.strip() != '':
             coffees = plus.stock.getCoffeeLabels()

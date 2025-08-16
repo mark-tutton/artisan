@@ -164,7 +164,7 @@ class PhidgetManager:
             if self.managersemaphore.available() < 1:
                 self.managersemaphore.release(1)
 
-    def getChannel(self,serial:int, port:Optional[int], channel:'Phidget', phidget_class_name:str, device_id:int, remote:bool, remoteOnly:bool) -> Optional['Phidget']: # type:ignore[no-any-unimported,unused-ignore]
+    def getChannel(self,serial:int, port:Optional[int], channel:int, phidget_class_name:str, device_id:int, remote:bool, remoteOnly:bool) -> Optional['Phidget']: # type:ignore[no-any-unimported,unused-ignore]
         try:
             self.managersemaphore.acquire(1)
             # we are looking for HUB ports
@@ -188,12 +188,12 @@ class PhidgetManager:
             if self.managersemaphore.available() < 1:
                 self.managersemaphore.release(1)
 
-    def reserveSerialPort(self, serial:int, port:Optional[int], channel:'Phidget', phidget_class_name:str, device_id:int, remote:bool = False, remoteOnly:bool = False) -> None: # type:ignore[no-any-unimported,unused-ignore]
+    def reserveSerialPort(self, serial:int, port:Optional[int], channel:int, phidget_class_name:str, device_id:int, remote:bool = False, remoteOnly:bool = False) -> None: # type:ignore[no-any-unimported,unused-ignore]
         chnl = self.getChannel(serial, port, channel, phidget_class_name, device_id, remote, remoteOnly)
         if chnl is not None:
             self.reserveChannel(chnl)
 
-    def releaseSerialPort(self, serial:int, port:Optional[int], channel:'Phidget', phidget_class_name:str, device_id:int, remote:bool = False, remoteOnly:bool = False) -> None: # type:ignore[no-any-unimported,unused-ignore]
+    def releaseSerialPort(self, serial:int, port:Optional[int], channel:int, phidget_class_name:str, device_id:int, remote:bool = False, remoteOnly:bool = False) -> None: # type:ignore[no-any-unimported,unused-ignore]
         chnl = self.getChannel(serial, port, channel, phidget_class_name, device_id, remote, remoteOnly)
         if chnl is not None:
             self.releaseChannel(chnl)
@@ -313,35 +313,6 @@ class PhidgetManager:
                 return p.getDeviceSerialNumber(), port
             return None, None
         except Exception as e: # pylint: disable=broad-except
-            _log.exception(e)
-            return None, None
-        finally:
-            if self.managersemaphore.available() < 1:
-                self.managersemaphore.release(1)
-
-# Add a method to list all connected Phidgets
-    def listConnectedPhidgets(self) -> None:
-        """Log all currently connected Phidget devices"""
-        try:
-            self.managersemaphore.acquire(1)
-            _log.info("=== Connected Phidget Devices ===")
-            if not self.attachedPhidgetChannels:
-                _log.info("No Phidget devices connected")
-            else:
-                for channel, available in self.attachedPhidgetChannels.items():
-                    try:
-                        _log.info("Device: %s | Serial: %s | Device ID: %s | Channel: %s | Port: %s | Status: %s | Local: %s",
-                                 channel.getDeviceName(),
-                                 channel.getDeviceSerialNumber(),
-                                 channel.getDeviceID(),
-                                 channel.getChannel(),
-                                 channel.getHubPort() if channel.getIsHubPortDevice() else 'N/A',
-                                 "AVAILABLE" if available else "RESERVED",
-                                 "Yes" if channel.getIsLocal() else "No")
-                    except Exception as e:
-                        _log.warning("Could not get info for channel: %s - %s", channel, e)
-            _log.info("=== End Connected Phidget Devices ===")
-        except Exception as e:
             _log.exception(e)
         finally:
             if self.managersemaphore.available() < 1:

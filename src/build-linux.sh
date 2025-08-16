@@ -92,8 +92,12 @@ cp includes/alarmclock.eot dist
 cp includes/alarmclock.svg dist
 cp includes/alarmclock.ttf dist
 cp includes/alarmclock.woff dist
+cp includes/roboto-300.woff2 dist
+cp includes/roboto-600.woff2 dist
+cp includes/roboto-regular.woff2 dist
 cp includes/artisan.tpl dist
 cp includes/scale_widget.tpl dist
+cp includes/fitty_patched.js dist
 cp includes/bigtext.js dist
 cp includes/sorttable.js dist
 cp includes/report-template.htm dist
@@ -163,7 +167,7 @@ for x in ${qt_imageformats}; do
 done
 
 
-SUPPORTED_LANGUAGES="ar da de el en es fa fi fr gd he hu id it ja ko lv nl no pl pt_BR pt sk sv th tr uk vi zh_CN zh_TW"
+SUPPORTED_LANGUAGES="ar cs da de el en es fa fi fr gd he hu id it ja ko lv nl no pl pt_BR pt sk sv th tr uk vi zh_CN zh_TW"
 
 # remove unused Qt translations
 

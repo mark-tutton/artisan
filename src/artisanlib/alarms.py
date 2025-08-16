@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from PyQt6.QtWidgets import QStyleOptionViewItem  # pylint: disable=unused-import
     from PyQt6.QtCore import QModelIndex # pylint: disable=unused-import
 
-from artisanlib.util import deltaLabelUTF8, comma2dot, float2float
+from artisanlib.util import deltaLabelUTF8, comma2dot, float2float, deserialize
 from artisanlib.dialogs import ArtisanResizeablDialog
 from artisanlib.widgets import (MyQComboBox, MyTableWidgetItemNumber, MyTableWidgetItemQCheckBox,
                                 MyTableWidgetItemQComboBox, MyTableWidgetItemQLineEdit, MyTableWidgetItemQTime)
@@ -56,7 +56,7 @@ class AlignDelegate(QStyledItemDelegate): # pyright:ignore[reportGeneralTypeIssu
     def initStyleOption(self, option:Optional['QStyleOptionViewItem'], index:'QModelIndex') -> None:
         super().initStyleOption(option, index)
         if option is not None:
-            option.displayAlignment = Qt.AlignmentFlag.AlignCenter
+            option.displayAlignment = Qt.AlignmentFlag.AlignCenter # pyrefly: ignore[bad-assignment]
 
 class AlarmDlg(ArtisanResizeablDialog):
     def __init__(self, parent:QWidget, aw:'ApplicationWindow', activeTab:int = 0) -> None:
@@ -662,8 +662,9 @@ class AlarmDlg(ArtisanResizeablDialog):
                     self.aw.qmc.alarmbeep = [0]*len(self.aw.qmc.alarmflag)
                 self.aw.qmc.alarmstrings = alarms['alarmstrings']
             elif ext == '.alog':
-                obj = cast('ProfileData', self.aw.deserialize(filename))
-                self.aw.loadAlarmsFromProfile(filename, obj)
+                obj = deserialize(filename)
+                self.aw.plusAddPath(obj, filename)
+                self.aw.loadAlarmsFromProfile(filename, cast('ProfileData', obj))
                 self.alarmsfile.setText(self.aw.qmc.alarmsfile)
             self.aw.qmc.alarmstate = [-1]*len(self.aw.qmc.alarmflag)
             aitems = self.buildAlarmSourceList()
@@ -695,7 +696,7 @@ class AlarmDlg(ArtisanResizeablDialog):
             alarms['alarmtemperatures'] = self.aw.qmc.alarmtemperature
             alarms['alarmactions'] = self.aw.qmc.alarmaction
             alarms['alarmbeep'] = self.aw.qmc.alarmbeep
-            alarms['alarmstrings'] = list(self.aw.qmc.alarmstrings)
+            alarms['alarmstrings'] = list(self.aw.qmc.alarmstrings) # pyrefly: ignore[no-matching-overload]
             from json import dump as json_dump
             with open(filename, 'w', encoding='utf-8') as outfile:
                 json_dump(alarms, outfile, indent=None, separators=(',', ':'), ensure_ascii=False)

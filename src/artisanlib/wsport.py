@@ -72,7 +72,7 @@ class wsport:
 
         # WebSocket data
         self.tx:float = 0 # timestamp as epoch of last read
-        self.readings:List[float] = [-1]*self.channels
+        self.readings:List[float] = [-1.0]*self.channels
 
         self.channel_requests:List[str] = ['']*self.channels
         self.channel_nodes:List[str] = ['']*self.channels
@@ -191,8 +191,8 @@ class wsport:
                         self.aw.addserial('wsport markDROP signal sent')
                 if self.OFFonDROP and self.aw.qmc.flagstart:
                     # turn Recorder off after two sampling periods
-                    delay = self.aw.qmc.delay * 2 # we delay the turning OFF action by 2 sampling periods
-                    await asyncio.sleep(delay)
+#                    delay = (self.aw.qmc.delay * 2)/1000 # we delay the turning OFF action by 2 sampling periods
+#                    await asyncio.sleep(delay)
                     self.aw.qmc.toggleMonitorSignal.emit()
                     if self.aw.seriallogflag:
                         self.aw.addserial('wsport toggleMonitor signal sent')
@@ -357,7 +357,7 @@ class wsport:
     def stop(self) -> None:
         # self._loop.stop() needs to be called as follows as the event loop class is not thread safe
         if self._loop is not None:
-            self._loop.call_soon_threadsafe(self._loop.stop)
+            self._loop.call_soon_threadsafe(self._loop.stop) # pyrefly: ignore
             self._loop = None
         # wait for the thread to finish
         if self._thread is not None:
