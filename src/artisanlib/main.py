@@ -2865,7 +2865,7 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
             self.resetAction.triggered.connect(self.resetApplication)
             self.helpMenu.addAction(self.resetAction)
 
-         # Create  plugins menu in menuBar
+         # Create plugins menu in menuBar
         self.menuPlugins = menuBar.addMenu('&' + QApplication.translate('Menu', 'Plugins'))
     
 
@@ -25080,7 +25080,7 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
             from artisanlib.roast_properties import editGraphDlg
             self.editgraphdialog = editGraphDlg(self,self,self.editGraphDlg_activeTab)
             
-            # ADD THIS: Set up inventory integration
+            # Plugin: Set up inventory integration
             if hasattr(self, 'inventory_fetcher_plugin') and self.inventory_fetcher_plugin:
                 try:
                     from artisanlib.plugins.inventory_fetcher.roast_properties_patch import setup_inventory_integration

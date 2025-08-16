@@ -32,3 +32,6 @@ outbox/
 #src/translations/*.qm
 #src/help/[!_]*.py
 #doc/help_dialogs/Output_html/[!_]*.html
+
+# ignore artisanlib/docs
+src/artisanlib/docs

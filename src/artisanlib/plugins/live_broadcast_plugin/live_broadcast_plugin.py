@@ -2,19 +2,23 @@ import asyncio
 import json
 import logging
 import time
-from typing import Dict, Any, Optional, List
+import traceback
+from typing import Dict, Any, Optional, List, Callable
 from threading import Thread
+from datetime import datetime
+from dataclasses import dataclass, field
+from enum import Enum
 
 try:
-    from PyQt6.QtWidgets import QMenu, QMainWindow, QMessageBox
+    from PyQt6.QtWidgets import QMenu, QMainWindow, QMessageBox, QDialog
     from PyQt6.QtGui import QAction
     from PyQt6.QtCore import QTimer, pyqtSignal, QObject
 except ImportError:
-    from PyQt5.QtWidgets import QMenu, QMainWindow, QMessageBox
+    from PyQt5.QtWidgets import QMenu, QMainWindow, QMessageBox, QDialog
     from PyQt5.QtGui import QAction
     from PyQt5.QtCore import QTimer, pyqtSignal, QObject
 
-from ..base import ArtisanPlugin
+from ..base import PluginBase
 from .config import LiveBroadcastConfig
 from artisanlib.notifications import NotificationType
 
@@ -27,1286 +31,1543 @@ except ImportError:
 _log = logging.getLogger(__name__)
 
 
+class BroadcastState(Enum):
+    """Broadcast connection states"""
+
+    DISCONNECTED = "disconnected"
+    CONNECTING = "connecting"
+    CONNECTED = "connected"
+    ERROR = "error"
+    RECONNECTING = "reconnecting"
+
+
+@dataclass
+class BroadcastMetrics:
+    """Broadcast performance metrics"""
+
+    messages_sent: int = 0
+    messages_failed: int = 0
+    bytes_sent: int = 0
+    last_send_time: Optional[datetime] = None
+    last_receive_time: Optional[datetime] = None
+    connection_attempts: int = 0
+    successful_connections: int = 0
+    failed_connections: int = 0
+    total_uptime: float = 0.0
+    start_time: Optional[datetime] = None
+
+
 class LiveBroadcastSignals(QObject):
     """A dedicated QObject to handle signals for the LiveBroadcastPlugin."""
+
     mark_event_signal = pyqtSignal(str, bool)
     toggle_monitoring_signal = pyqtSignal(bool)
     toggle_roasting_signal = pyqtSignal(bool)
     reset_roast_signal = pyqtSignal()
+    broadcast_state_changed = pyqtSignal(str)  # new_state
+    broadcast_error = pyqtSignal(str)  # error_message
 
-class LiveBroadcastPlugin(ArtisanPlugin):
-    """Plugin for broadcasting live roast data and events to external servers"""
-    
-    mark_event_signal = pyqtSignal(str, bool)
-    
+
+class LiveBroadcastPlugin(PluginBase):
     @property
     def name(self) -> str:
         return "Live Broadcast"
-    
+
     @property
     def version(self) -> str:
-        return "1.1.0"
-    
+        return "2.0.0"
+
+    @property
+    def description(self) -> str:
+        return f"{self.name} v{self.version} - Real-time roast data broadcasting"
+
     def __init__(self):
         super().__init__()
+
+        # Core components
         self.signals = LiveBroadcastSignals()
         self.config = LiveBroadcastConfig()
         self.broadcaster: Optional[WebSocketBroadcaster] = None
+
+        # Timers
         self.update_timer: Optional[QTimer] = None
+        self.monitoring_timer: Optional[QTimer] = None
+        self.health_check_timer: Optional[QTimer] = None
+
+        # State tracking
+        self.broadcast_state = BroadcastState.DISCONNECTED
         self.last_broadcast_time = 0
         self.broadcast_interval = 1.0  # seconds
-        
-        # Track event states to avoid duplicate broadcasts
-        self.last_event_states = {
-            'charge': False,
-            'dry_end': False,
-            'fc_start': False,
-            'fc_end': False,
-            'sc_start': False,
-            'sc_end': False,
-            'drop': False,
-            'cool_end': False
-        }
-        
-    def initialize(self, main_window: QMainWindow) -> None:
-        super().initialize(main_window)
-        
-        self.signals.mark_event_signal.connect(self._mark_event_on_canvas)
-        
-        # Check if websockets is available
-        if not WEBSOCKETS_AVAILABLE:
-            self.logger.warning(
-                "websockets library not available. Live broadcasting functionality will be disabled. "
-                "Install with: pip install websockets"
-            )
-            return
-        
-        self.logger.info("Initializing Live Broadcast Plugin...")
-        
-        # Connect to roast data signals
-        if hasattr(main_window, 'qmc'):
-            self.logger.info("Found qmc object, connecting to signals...")
-            
-            # Connect to temperature update signals
-            if hasattr(main_window.qmc, 'updategraphicsSignal'):
-                main_window.qmc.updategraphicsSignal.connect(self._on_data_update)
-                self.logger.info("Connected to updategraphicsSignal")
-            
-            # Connect control signals
-            if hasattr(main_window.qmc, 'ToggleMonitor'):
-                self.signals.toggle_monitoring_signal.connect(main_window.qmc.ToggleMonitor)
-                self.logger.info("Connected toggle_monitoring_signal to qmc.onoff")
-            if hasattr(main_window.qmc, 'ToggleRecorder'):
-                self.signals.toggle_roasting_signal.connect(main_window.qmc.ToggleRecorder)
-                self.logger.info("Connected toggle_roasting_signal to qmc.startstop")
-            if hasattr(main_window.qmc, 'reset'):
-                self.signals.reset_roast_signal.connect(main_window.qmc.reset)
-                self.logger.info("Connected reset_roast_signal to qmc.reset")
 
-            
-            
-            # Connect to event signals
+        # Event tracking
+        self.last_event_states = {
+            "charge": False,
+            "dry_end": False,
+            "fc_start": False,
+            "fc_end": False,
+            "sc_start": False,
+            "sc_end": False,
+            "drop": False,
+            "cool_end": False,
+        }
+
+        # Performance metrics
+        self.metrics = BroadcastMetrics()
+
+        # Connection health
+        self.last_heartbeat = 0
+        self.heartbeat_interval = 30  # seconds
+
+        # Error recovery
+        self.consecutive_failures = 0
+        self.max_consecutive_failures = 5
+
+        # Headless mode detection
+        self.headless_mode = False
+
+    def _initialize_plugin(self) -> None:
+        """Initialize the plugin with comprehensive error handling"""
+        try:
+            # Check headless mode
+            self.headless_mode = getattr(self.config, "headless_mode", False)
+
+            # Connect signals
+            self.signals.mark_event_signal.connect(self._mark_event_on_canvas)
+
+            # Check websockets availability
+            if not WEBSOCKETS_AVAILABLE:
+                self._record_error(
+                    "WebSocketsUnavailable",
+                    "websockets library not available. Live broadcasting functionality will be disabled.",
+                    {"install_command": "pip install websockets"},
+                )
+                return
+
+            self.logger.info(
+                f"Initializing Live Broadcast Plugin (headless: {self.headless_mode})..."
+            )
+
+            # Setup main window connections
+            self._setup_main_window_connections()
+
+            # Setup timers
+            self._setup_timers()
+
+            # Start broadcaster if auto-start is enabled
+            if self.config.auto_start:
+                self.logger.info("Auto-start enabled, starting broadcaster...")
+                self._start_broadcaster()
+            else:
+                self.logger.info("Auto-start disabled, broadcaster not started")
+
+        except Exception as e:
+            self._record_error("InitializationError", str(e))
+            raise
+
+    def _setup_main_window_connections(self) -> None:
+        """Setup connections to main window signals"""
+        try:
+            if not hasattr(self.main_window, "qmc"):
+                self._record_error("MainWindowError", "qmc object not found on main_window")
+                return
+
+            qmc = self.main_window.qmc
+            self.logger.info("Setting up main window connections...")
+
+            # Temperature update signals
+            if hasattr(qmc, "updategraphicsSignal"):
+                qmc.updategraphicsSignal.connect(self._on_data_update)
+                self.logger.info("Connected to updategraphicsSignal")
+
+            # Control signals
+            self._connect_control_signals(qmc)
+
+            # Event signals
+            self._connect_event_signals(qmc)
+
+            # Custom event signals
+            if hasattr(qmc, "eventRecordSignal"):
+                qmc.eventRecordSignal.connect(self._on_custom_event)
+                self.logger.info("Connected to eventRecordSignal")
+
+            # Device update signals
+            self._connect_device_signals(qmc)
+
+        except Exception as e:
+            self._record_error("ConnectionSetupError", str(e))
+
+    def _connect_control_signals(self, qmc) -> None:
+        """Connect control signals"""
+        try:
             signal_connections = [
-                ('markChargeSignal', self._on_charge_event),
-                ('markDRYSignal', self._on_dry_end_event),
-                ('markFCsSignal', self._on_fc_start_event),
-                ('markFCeSignal', self._on_fc_end_event),
-                ('markSCsSignal', self._on_sc_start_event),
-                ('markSCeSignal', self._on_sc_end_event),
-                ('markDropSignal', self._on_drop_event),
-                ('markCoolSignal', self._on_cool_end_event),
+                ("ToggleMonitor", self.signals.toggle_monitoring_signal),
+                ("ToggleRecorder", self.signals.toggle_roasting_signal),
+                ("reset", self.signals.reset_roast_signal),
             ]
-            
+
+            for method_name, signal in signal_connections:
+                if hasattr(qmc, method_name):
+                    signal.connect(getattr(qmc, method_name))
+                    self.logger.info(f"Connected {signal.__class__.__name__} to qmc.{method_name}")
+                else:
+                    self.logger.warning(f"Method {method_name} not found on qmc")
+
+        except Exception as e:
+            self._record_error("ControlSignalError", str(e))
+
+    def _connect_event_signals(self, qmc) -> None:
+        """Connect event signals"""
+        try:
+            signal_connections = [
+                ("markChargeSignal", self._on_charge_event),
+                ("markDRYSignal", self._on_dry_end_event),
+                ("markFCsSignal", self._on_fc_start_event),
+                ("markFCeSignal", self._on_fc_end_event),
+                ("markSCsSignal", self._on_sc_start_event),
+                ("markSCeSignal", self._on_sc_end_event),
+                ("markDropSignal", self._on_drop_event),
+                ("markCoolSignal", self._on_cool_end_event),
+            ]
+
             for signal_name, handler in signal_connections:
-                if hasattr(main_window.qmc, signal_name):
-                    signal = getattr(main_window.qmc, signal_name)
+                if hasattr(qmc, signal_name):
+                    signal = getattr(qmc, signal_name)
                     signal.connect(handler)
                     self.logger.info(f"Connected to {signal_name}")
                 else:
                     self.logger.warning(f"Signal {signal_name} not found on qmc")
-            
-            # Connect to custom event signals
-            if hasattr(main_window.qmc, 'eventRecordSignal'):
-                main_window.qmc.eventRecordSignal.connect(self._on_custom_event)
-                self.logger.info("Connected to eventRecordSignal")
-            
-            # Connect to roast start/end signals
-            if hasattr(main_window.qmc, 'flagstart'):
-                # Monitor roast state changes
+
+        except Exception as e:
+            self._record_error("EventSignalError", str(e))
+
+    def _connect_device_signals(self, qmc) -> None:
+        """Connect device update signals"""
+        try:
+            if hasattr(qmc, "device"):
+                device_signals = [
+                    ("deviceUpdateSignal", self._on_device_update),
+                    ("sensorUpdateSignal", self._on_sensor_update),
+                ]
+
+                for signal_name, handler in device_signals:
+                    if hasattr(qmc, signal_name):
+                        signal = getattr(qmc, signal_name)
+                        signal.connect(handler)
+                        self.logger.info(f"Connected to {signal_name}")
+
+        except Exception as e:
+            self._record_error("DeviceSignalError", str(e))
+
+    def _setup_timers(self) -> None:
+        """Setup timers"""
+        try:
+            # Roast state monitoring timer
+            if hasattr(self.main_window.qmc, "flagstart"):
                 self.update_timer = QTimer()
                 self.update_timer.timeout.connect(self._check_roast_state)
                 self.update_timer.start(1000)  # Check every second
                 self.logger.info("Started roast state monitoring timer")
 
-                # monitoring data timer - broadcasts sensor data even when not roasting
-                try:
-                    self.monitoring_timer = QTimer()
-                    self.monitoring_timer.timeout.connect(self._broadcast_monitoring_data)
-                    self.monitoring_timer.start(1000)  # every 2 secs
-                    _log.info("Started monitoring data broadcast timer")
-                except Exception as e:
-                    self.logger.error(f"Error starting monitoring timer: {e}")
+            # Monitoring data broadcast timer
+            self.monitoring_timer = QTimer()
+            self.monitoring_timer.timeout.connect(self._broadcast_monitoring_data)
+            self.monitoring_timer.start(1000)  # every second
+            self.logger.info("Started monitoring data broadcast timer")
 
-            # Connect to roast data signals
-            if hasattr(main_window, 'qmc'):
-                self.logger.info("Found qmc object, connecting to signals...")
-                
-                # Connect to temperature update signals
-                if hasattr(main_window.qmc, 'updategraphicsSignal'):
-                    main_window.qmc.updategraphicsSignal.connect(self._on_data_update)
-                    self.logger.info("Connected to updategraphicsSignal")
-                
-                # device-specific update signals (deviceUpdateSignal, sensorUpdateSignal)
-                if hasattr(main_window.qmc, 'device'):
-                    if hasattr(main_window.qmc, 'deviceUpdateSignal'):
-                        main_window.qmc.deviceUpdateSignal.connect(self._on_device_update)
-                        self.logger.info("Connected to deviceUpdateSignal")
-                    
-                    if hasattr(main_window.qmc, 'sensorUpdateSignal'):
-                        main_window.qmc.sensorUpdateSignal.connect(self._on_sensor_update)
-                        self.logger.info("Connected to sensorUpdateSignal")
-                
-        else:
-            self.logger.error("qmc object not found on main_window")
-        
-        # Start broadcaster if auto-start is enabled
-        if self.config.auto_start:
-            self.logger.info("Auto-start enabled, starting broadcaster...")
-            self._start_broadcaster()
-        else:
-            self.logger.info("Auto-start disabled, broadcaster not started")
+            # Health check timer
+            self.health_check_timer = QTimer()
+            self.health_check_timer.timeout.connect(self._health_check)
+            self.health_check_timer.start(30000)  # every 30 seconds
+            self.logger.info("Started health check timer")
 
-        if self.broadcaster:
-            self.broadcaster.add_message_callback(self._on_ws_message)
-    
-    def create_menu(self, parent_menu: QMenu) -> QMenu:
-        menu = QMenu(self.name, parent_menu)
-        
-        if not WEBSOCKETS_AVAILABLE:
-            # Show warning if websockets is not available
-            warning_action = QAction("⚠️ websockets library required", menu)
-            warning_action.setEnabled(False)
-            menu.addAction(warning_action)
-            
-            install_action = QAction("Install: pip install websockets", menu)
-            install_action.setEnabled(False)
-            menu.addAction(install_action)
-            
-            return menu
-        
-        # Server controls
-        self.start_action = QAction("Start Broadcasting", menu)
-        self.start_action.triggered.connect(self._start_broadcaster)
-        menu.addAction(self.start_action)
-        
-        self.stop_action = QAction("Stop Broadcasting", menu)
-        self.stop_action.triggered.connect(self._stop_broadcaster)
-        menu.addAction(self.stop_action)
-        
-        menu.addSeparator()
-        
-        # Configuration
-        config_action = QAction("Configure", menu)
-        config_action.triggered.connect(self._configure)
-        menu.addAction(config_action)
-        
-        # Debug actions
-        debug_menu = QMenu("Debug", menu)
-        
-        test_event_action = QAction("Test Event Broadcast", debug_menu)
-        test_event_action.triggered.connect(self._test_event_broadcast)
-        debug_menu.addAction(test_event_action)
-        
-        test_data_action = QAction("Test Data Broadcast", debug_menu)
-        test_data_action.triggered.connect(self._test_data_broadcast)
-        debug_menu.addAction(test_data_action)
-        
-        status_action = QAction("Show Status", debug_menu)
-        status_action.triggered.connect(self._show_status)
-        debug_menu.addAction(status_action)
-        
-        menu.addMenu(debug_menu)
-        
-        # Status
-        self.status_action = QAction("Status: Disconnected", menu)
-        self.status_action.setEnabled(False)
-        menu.addAction(self.status_action)
-        
-        return menu
-    
-    def on_roast_start(self) -> None:
-        """Called when a roast starts"""
-        self.logger.info("Roast started")
-        if WEBSOCKETS_AVAILABLE:
-            self._broadcast_roast_event("roast_started")
-    
-    def on_roast_end(self) -> None:
-        """Called when a roast ends"""
-        self.logger.info("Roast ended")
-        if WEBSOCKETS_AVAILABLE:
-            self._broadcast_roast_event("roast_ended")
-    
-    def on_data_update(self, data: Dict[str, Any]) -> None:
-        """Called when new roast data is available"""
-        if WEBSOCKETS_AVAILABLE:
-            self._broadcast_roast_data(data)
-    
-    def _check_roast_state(self) -> None:
-        """Monitor roast state changes"""
-        if not self.main_window or not hasattr(self.main_window, 'qmc'):
-            return
-            
-        qmc = self.main_window.qmc
-        
-        # Check if roast just started
-        if qmc.flagstart and not hasattr(self, '_roast_started'):
-            self._roast_started = True
-            self.on_roast_start()
-        
-        # Check if roast just ended
-        elif not qmc.flagstart and hasattr(self, '_roast_started'):
-            self._roast_started = False
-            self.on_roast_end()
-        
-        # Check for event state changes
-        self._check_event_states()
-    
-    def _check_event_states(self) -> None:
-        """Check for changes in event states and broadcast them"""
-        if not self.main_window or not hasattr(self.main_window, 'qmc'):
-            return
-            
-        qmc = self.main_window.qmc
-        
-        # Check standard events
-        events_to_check = [
-            ('charge', 0),
-            ('dry_end', 1),
-            ('fc_start', 2),
-            ('fc_end', 3),
-            ('sc_start', 4),
-            ('sc_end', 5),
-            ('drop', 6),
-            ('cool_end', 7)
-        ]
-        
-        for event_name, timeindex_idx in events_to_check:
-            current_state = qmc.timeindex[timeindex_idx] > 0
-            if current_state != self.last_event_states[event_name]:
-                self.last_event_states[event_name] = current_state
-                if current_state:
-                    self.logger.info(f"Event state changed: {event_name} is now active")
-                    self._broadcast_event(event_name)
-    
-    def _on_charge_event(self, noaction: bool = False) -> None:
-        """Handle CHARGE event"""
-        self.logger.info(f"CHARGE event triggered (noaction={noaction})")
-        if noaction:
-            return
-        if WEBSOCKETS_AVAILABLE:
-            self._broadcast_event("charge")
-    
-    def _on_dry_end_event(self, noaction: bool = False) -> None:
-        """Handle DRY END event"""
-        self.logger.info(f"DRY END event triggered (noaction={noaction})")
-        if noaction:
-            return
-        if WEBSOCKETS_AVAILABLE:
-            self._broadcast_event("dry_end")
-    
-    def _on_fc_start_event(self, noaction: bool = False) -> None:
-        """Handle FC START event"""
-        self.logger.info(f"FC START event triggered (noaction={noaction})")
-        if noaction:
-            return
-        if WEBSOCKETS_AVAILABLE:
-            self._broadcast_event("fc_start")
-    
-    def _on_fc_end_event(self, noaction: bool = False) -> None:
-        """Handle FC END event"""
-        self.logger.info(f"FC END event triggered (noaction={noaction})")
-        if noaction:
-            return
-        if WEBSOCKETS_AVAILABLE:
-            self._broadcast_event("fc_end")
-    
-    def _on_sc_start_event(self, noaction: bool = False) -> None:
-        """Handle SC START event"""
-        self.logger.info(f"SC START event triggered (noaction={noaction})")
-        if noaction:
-            return
-        if WEBSOCKETS_AVAILABLE:
-            self._broadcast_event("sc_start")
-    
-    def _on_sc_end_event(self, noaction: bool = False) -> None:
-        """Handle SC END event"""
-        self.logger.info(f"SC END event triggered (noaction={noaction})")
-        if noaction:
-            return
-        if WEBSOCKETS_AVAILABLE:
-            self._broadcast_event("sc_end")
-    
-    def _on_drop_event(self, noaction: bool = False) -> None:
-        """Handle DROP event"""
-        self.logger.info(f"DROP event triggered (noaction={noaction})")
-        if noaction:
-            return
-        if WEBSOCKETS_AVAILABLE:
-            self._broadcast_event("drop")
-    
-    def _on_cool_end_event(self, noaction: bool = False) -> None:
-        """Handle COOL END event"""
-        self.logger.info(f"COOL END event triggered (noaction={noaction})")
-        if noaction:
-            return
-        if WEBSOCKETS_AVAILABLE:
-            self._broadcast_event("cool_end")
-    
-    def _on_custom_event(self, event_index: int) -> None:
-        """Handle custom events"""
-        self.logger.info(f"Custom event triggered: index={event_index}")
-        if not WEBSOCKETS_AVAILABLE or not self.main_window:
-            return
-            
-        qmc = self.main_window.qmc
-        
-        # Get custom event data
-        if (hasattr(qmc, 'specialevents') and 
-            hasattr(qmc, 'specialeventstype') and 
-            hasattr(qmc, 'specialeventsvalue') and 
-            hasattr(qmc, 'specialeventsStrings') and
-            len(qmc.specialevents) > event_index):
-            
-            event_data = {
-                'type': 'custom_event',
-                'event_index': event_index,
-                'time': qmc.specialevents[event_index] if event_index < len(qmc.specialevents) else 0,
-                'event_type': qmc.specialeventstype[event_index] if event_index < len(qmc.specialeventstype) else 4,
-                'value': qmc.specialeventsvalue[event_index] if event_index < len(qmc.specialeventsvalue) else 0,
-                'description': qmc.specialeventsStrings[event_index] if event_index < len(qmc.specialeventsStrings) else '',
-                'timestamp': time.time()
-            }
-            
-            self._broadcast_custom_event(event_data)
-    
-    def _on_data_update(self) -> None:
-        """Handle temperature data updates"""
-        if not WEBSOCKETS_AVAILABLE:
-            return
-            
-        current_time = time.time()
-        
-        # Throttle broadcasts to avoid overwhelming the server
-        if current_time - self.last_broadcast_time < self.broadcast_interval:
-            return
-            
-        self.last_broadcast_time = current_time
-        
-        # Get current roast data
-        roast_data = self._get_current_roast_data()
-        if roast_data:
-            self.on_data_update(roast_data)
-    
-    def _safe_get_timeindex(self, qmc, index: int) -> Optional[float]:
-        """Safely get time value from timeindex"""
-        try:
-            if (hasattr(qmc, 'timeindex') and 
-                hasattr(qmc, 'timex') and 
-                len(qmc.timeindex) > index and 
-                qmc.timeindex[index] > -1 and 
-                len(qmc.timex) > qmc.timeindex[index]):
-                return qmc.timex[qmc.timeindex[index]]
-        except (IndexError, AttributeError):
-            pass
-        return None
-    
-    def _safe_get_weight(self, qmc, index: int) -> float:
-        """Safely get weight value"""
-        try:
-            if hasattr(qmc, 'weight') and len(qmc.weight) > index:
-                return qmc.weight[index]
-        except (IndexError, AttributeError):
-            pass
-        return 0.0
-    
-    def _safe_get_temp(self, temp_list, index: int = -1) -> Optional[float]:
-        """Safely get temperature value"""
-        try:
-            if temp_list and len(temp_list) > 0:
-                if index == -1:
-                    return temp_list[-1]
-                elif 0 <= index < len(temp_list):
-                    return temp_list[index]
-        except (IndexError, AttributeError):
-            pass
-        return None
-    
-    def _get_current_roast_data(self) -> Optional[Dict[str, Any]]:
-        """Extract current roast data from the application"""
-        if not self.main_window or not hasattr(self.main_window, 'qmc'):
+        except Exception as e:
+            self._record_error("TimerSetupError", str(e))
+
+    def _create_plugin_menu(self, parent_menu: QMenu) -> Optional[QMenu]:
+        """Create plugin menu with headless mode support"""
+        if self.headless_mode:
+            self.logger.info("Skipping menu creation in headless mode")
             return None
-            
-        qmc = self.main_window.qmc
-        
-        # Get current temperatures
-        current_et = self._safe_get_temp(qmc.temp1)
-        current_bt = self._safe_get_temp(qmc.temp2)
 
-        # Get extra temperature sensors
-        extra_temperatures = self._get_extra_temperatures(qmc)
-        
-        # Get event times
-        charge_time = self._safe_get_timeindex(qmc, 0)
-        dry_end_time = self._safe_get_timeindex(qmc, 1)
-        fc_start_time = self._safe_get_timeindex(qmc, 2)
-        fc_end_time = self._safe_get_timeindex(qmc, 3)
-        sc_start_time = self._safe_get_timeindex(qmc, 4)
-        sc_end_time = self._safe_get_timeindex(qmc, 5)
-        drop_time = self._safe_get_timeindex(qmc, 6)
-        cool_end_time = self._safe_get_timeindex(qmc, 7)
-        
-        # Get event temperatures
-        charge_temp = self._safe_get_temp(qmc.temp2, qmc.timeindex[0]) if qmc.timeindex[0] > -1 else None
-        dry_end_temp = self._safe_get_temp(qmc.temp2, qmc.timeindex[1]) if qmc.timeindex[1] > -1 else None
-        fc_start_temp = self._safe_get_temp(qmc.temp2, qmc.timeindex[2]) if qmc.timeindex[2] > -1 else None
-        fc_end_temp = self._safe_get_temp(qmc.temp2, qmc.timeindex[3]) if qmc.timeindex[3] > -1 else None
-        sc_start_temp = self._safe_get_temp(qmc.temp2, qmc.timeindex[4]) if qmc.timeindex[4] > -1 else None
-        sc_end_temp = self._safe_get_temp(qmc.temp2, qmc.timeindex[5]) if qmc.timeindex[5] > -1 else None
-        drop_temp = self._safe_get_temp(qmc.temp2, qmc.timeindex[6]) if qmc.timeindex[6] > -1 else None
-        cool_end_temp = self._safe_get_temp(qmc.temp2, qmc.timeindex[7]) if qmc.timeindex[7] > -1 else None
-        
-        # Get custom events
-        custom_events = []
-        if hasattr(qmc, 'specialevents') and hasattr(qmc, 'specialeventstype'):
-            for i, event_time in enumerate(qmc.specialevents):
-                if i < len(qmc.specialeventstype):
-                    custom_events.append({
-                        'time': event_time,
-                        'type': qmc.specialeventstype[i],
-                        'value': qmc.specialeventsvalue[i] if i < len(qmc.specialeventsvalue) else 0,
-                        'description': qmc.specialeventsStrings[i] if i < len(qmc.specialeventsStrings) else ''
-                    })
-        
-        # Calculate time since charge
-        time_since_charge = None
-        if charge_time is not None and len(qmc.timex) > 0:
-            time_since_charge = qmc.timex[-1] - charge_time
-        
-        # # Calculate rate of rise
-        # ror_et = None
-        # ror_bt = None
-        # if len(qmc.temp1) > 1 and len(qmc.timex) > 1:
-        #     try:
-        #         ror_et = (qmc.temp1[-1] - qmc.temp1[-2]) / (qmc.timex[-1] - qmc.timex[-2]) * 60  # °C/min
-        #     except (IndexError, ZeroDivisionError):
-        #         pass
-                
-        # if len(qmc.temp2) > 1 and len(qmc.timex) > 1:
-        #     try:
-        #         ror_bt = (qmc.temp2[-1] - qmc.temp2[-2]) / (qmc.timex[-1] - qmc.timex[-2]) * 60  # °C/min
-        #     except (IndexError, ZeroDivisionError):
-        #         pass
-
-        # ROR
-        ror_et = getattr(qmc, 'rateofchange1', None)
-        ror_bt = getattr(qmc, 'rateofchange2', None)
-
-        # Fallback to manual calc
-        if ror_et is None and len(qmc.temp1) >= 2 and len(qmc.timex) >= 2:
-            try:
-                ror_et = (qmc.temp1[-1] - qmc.temp1[-2]) / (qmc.timex[-1] - qmc.timex[-2]) * 60
-            except (IndexError, ZeroDivisionError):
-                ror_et = None
-
-        if ror_bt is None and len(qmc.temp2) >= 2 and len(qmc.timex) >= 2:
-            try:
-                ror_bt = (qmc.temp2[-1] - qmc.temp2[-2]) / (qmc.timex[-1] - qmc.timex[-2]) * 60
-            except (IndexError, ZeroDivisionError):
-                ror_bt = None
-        
-        # Get monitoring state
-        monitoring_state = self._get_monitoring_state(qmc)
-        
-        return {
-            'type': 'roast_data',
-
-            ## Roaster Info
-            'roastertype': getattr(qmc, 'roastertype', None),
-            'operator': getattr(qmc, 'operator', None),
-
-            ## Roast Info
-            'timestamp': time.time(),
-            "roast_uuid": getattr(qmc, 'roastUUID', None),
-            "title": getattr(qmc, 'title', None),
-            # "roast_date": getattr(qmc, 'roastdate', None),
-            # "roast_time": getattr(qmc, 'roasttime', None),
-            'roast_time': qmc.timex[-1] if qmc.timex else 0,
-            'time_since_charge': time_since_charge,
-
-            ## Roast Info - Batch Info
-            "roast_batch_number": getattr(qmc, 'roastbatchnr', None),
-            "roast_batch_prefix": getattr(qmc, 'roastbatchprefix', None),
-            "roast_batch_pos": getattr(qmc, 'roastbatchpos', None),
-
-            ## Roast Info - Bean Info
-            "bean_name": getattr(qmc, 'bean_name', None),
-            "weight": {
-                "in": self._safe_get_weight(qmc, 0),
-                "out": self._safe_get_weight(qmc, 1),
-                "unit": self._safe_get_weight(qmc, 2) if self._safe_get_weight(qmc, 2) else "kg"
-            },
-
-            ## Roast Info - Background Profile Info 
-            "background_profile": {
-                "background_path": getattr(qmc, 'backgroundpath', None),
-                "background_uuid": getattr(qmc, 'backgroundUUID', None),
-            },
-
-            ## Roast Info - Ambient Temperature Info
-            'ambient_temperature': getattr(qmc, 'ambientTemp', None),
-            'ambient_humidity': getattr(qmc, 'ambient_humidity', None),
-
-            ## Roast Info - Current Temperatures
-            'current_temperatures': {
-                'et': current_et,
-                'bt': current_bt
-            },
-            'rate_of_rise': {
-                'et': ror_et,
-                'bt': ror_bt
-            },
-
-            # Roast Info - Extra Temp Sensors
-            'extra_temperatures': extra_temperatures,
-
-            ## Roast Info - Events
-            'events': {
-                'charge': {
-                    'time': charge_time,
-                    'temperature': charge_temp
-                },
-                'dry_end': {
-                    'time': dry_end_time,
-                    'temperature': dry_end_temp
-                },
-                'fc_start': {
-                    'time': fc_start_time,
-                    'temperature': fc_start_temp
-                },
-                'fc_end': {
-                    'time': fc_end_time,
-                    'temperature': fc_end_temp
-                },
-                'sc_start': {
-                    'time': sc_start_time,
-                    'temperature': sc_start_temp
-                },
-                'sc_end': {
-                    'time': sc_end_time,
-                    'temperature': sc_end_temp
-                },
-                'drop': {
-                    'time': drop_time,
-                    'temperature': drop_temp
-                },
-                'cool_end': {
-                    'time': cool_end_time,
-                    'temperature': cool_end_temp
-                }
-            },
-
-            ## Roast Info - Custom Events
-            'custom_events': custom_events,
-
-            ## Roast Info - Roast State
-            'roast_state': {
-                'is_roasting': qmc.flagstart,
-                'is_monitoring': qmc.flagon
-            },
-
-            # Monitoring Info
-            'monitoring_state': monitoring_state
-        }
-    
-    def _get_extra_temperatures(self, qmc) -> Dict[str, Any]:
-        """Extract extra temperature sensor data"""
-        extra_temps = {
-            'sensors': [],
-            'total_sensors': 0
-        }
-        
         try:
-            # Get extra temperature 1 sensors
-            if hasattr(qmc, 'extratemp1') and hasattr(qmc, 'extraname1'):
-                for i, temp_list in enumerate(qmc.extratemp1):
-                    if temp_list and len(temp_list) > 0:
-                        sensor_name = qmc.extraname1[i] if i < len(qmc.extraname1) else f"Extra1_{i}"
-                        current_temp = self._safe_get_temp(temp_list)
-                        extra_temps['sensors'].append({
-                            'name': sensor_name,
-                            'type': 'extra1',
-                            'index': i,
-                            'temperature': current_temp,
-                            'unit': '°F'
-                        })
-            
-            # Get extra temperature 2 sensors
-            if hasattr(qmc, 'extratemp2') and hasattr(qmc, 'extraname2'):
-                for i, temp_list in enumerate(qmc.extratemp2):
-                    if temp_list and len(temp_list) > 0:
-                        sensor_name = qmc.extraname2[i] if i < len(qmc.extraname2) else f"Extra2_{i}"
-                        current_temp = self._safe_get_temp(temp_list)
-                        extra_temps['sensors'].append({
-                            'name': sensor_name,
-                            'type': 'extra2',
-                            'index': i,
-                            'temperature': current_temp,
-                            'unit': '°F'
-                        })
-            
-            extra_temps['total_sensors'] = len(extra_temps['sensors'])
-            
+            menu = QMenu(self.name, parent_menu)
+
+            if not WEBSOCKETS_AVAILABLE:
+                # Show warning if websockets is not available
+                warning_action = QAction("⚠️ websockets library required", menu)
+                warning_action.setEnabled(False)
+                menu.addAction(warning_action)
+
+                install_action = QAction("Install: pip install websockets", menu)
+                install_action.setEnabled(False)
+                menu.addAction(install_action)
+
+                return menu
+
+            # Server controls
+            self.start_action = QAction("Start Broadcasting", menu)
+            self.start_action.triggered.connect(self._start_broadcaster)
+            menu.addAction(self.start_action)
+
+            self.stop_action = QAction("Stop Broadcasting", menu)
+            self.stop_action.triggered.connect(self._stop_broadcaster)
+            menu.addAction(self.stop_action)
+
+            menu.addSeparator()
+
+            # Configuration
+            config_action = QAction("Configure", menu)
+            config_action.triggered.connect(self._configure)
+            menu.addAction(config_action)
+
+            # Status
+            status_action = QAction("Show Status", menu)
+            status_action.triggered.connect(self._show_status)
+            menu.addAction(status_action)
+
+            menu.addSeparator()
+
+            # Test actions
+            test_event_action = QAction("Test Event Broadcast", menu)
+            test_event_action.triggered.connect(self._test_event_broadcast)
+            menu.addAction(test_event_action)
+
+            test_data_action = QAction("Test Data Broadcast", menu)
+            test_data_action.triggered.connect(self._test_data_broadcast)
+            menu.addAction(test_data_action)
+
+            return menu
+
         except Exception as e:
-            self.logger.error(f"Error getting extra temperatures: {e}")
-        
-        return extra_temps
-    
-    
-    def _get_monitoring_state(self, qmc) -> Dict[str, Any]:
-        """Extract comprehensive monitoring state information"""
-        monitoring_state = {
-            'system_status': {},
-            'device_status': {},
-            'sensor_status': {},
-            'sensor_values': {},
-            'flags': {},
-            'connection_status': {}
-        }
-        
+            self._record_error("MenuCreationError", str(e))
+            return None
+
+    def _on_roast_start_impl(self) -> None:
+        """Handle roast start"""
         try:
-            # Get current sensor readings from real-time values
-            et_temp = getattr(qmc, 'RTtemp1', None)
-            bt_temp = getattr(qmc, 'RTtemp2', None)
-            
-            et_active = et_temp is not None and et_temp != 0.0
-            bt_active = bt_temp is not None and bt_temp != 0.0
-            
-            self.logger.info(f"RTtemp1 (ET): {et_temp}, RTtemp2 (BT): {bt_temp}")
-            self.logger.info(f"ET active: {et_active}, BT active: {bt_active}")
-            
-            # System status
-            monitoring_state['system_status'] = {
-                'is_monitoring': getattr(qmc, 'flagon', False),
-                'is_roasting': getattr(qmc, 'flagstart', False),
-                'is_sampling': getattr(qmc, 'flagsampling', False),
-                'is_sampling_thread_running': getattr(qmc, 'flagsamplingthreadrunning', False),
-                'is_keep_on': getattr(qmc, 'flagKeepON', False),
-                'is_open_completed': getattr(qmc, 'flagOpenCompleted', False),
-                'uptime': self._safe_get_uptime(qmc)
-            }
-            
-            # Device status
-            monitoring_state['device_status'] = {
-                'device_type': getattr(qmc, 'device', None),
-                'device_logging': getattr(qmc, 'device_logging', False),
-                'device_log_file': getattr(qmc, 'device_log_file_name', None),
-                'phidget_manager_active': hasattr(qmc, 'phidgetManager') and qmc.phidgetManager is not None,
-                'yocto_remote_flag': getattr(qmc, 'yoctoRemoteFlag', False),
-                'phidget_remote_flag': getattr(qmc, 'phidgetRemoteFlag', False)
-            }
-            
-            # Sensor status
-            monitoring_state['sensor_status'] = {
-                'et_sensor_active': et_active,
-                'bt_sensor_active': bt_active,
-                'extra_sensors_count': len(qmc.extratemp1) + len(qmc.extratemp2) if hasattr(qmc, 'extratemp1') and hasattr(qmc, 'extratemp2') else 0,
-                'ambient_sensor_active': getattr(qmc, 'ambientTemp', None) is not None,
-                'pressure_sensor_active': getattr(qmc, 'ambient_pressure', None) is not None,
-                'humidity_sensor_active': getattr(qmc, 'ambient_humidity', None) is not None
-            }
-            
-            # Sensor values 
-            monitoring_state['sensor_values'] = {
-                'et_temperature': et_temp,
-                'bt_temperature': bt_temp,
-                'ambient_temperature': getattr(qmc, 'ambientTemp', None),
-                'ambient_pressure': getattr(qmc, 'ambient_pressure', None),
-                'ambient_humidity': getattr(qmc, 'ambient_humidity', None),
-                'extra_sensors': self._get_extra_sensor_values(qmc)
-            }
-            
-            # Event flags
-            monitoring_state['flags'] = {
-                'auto_charge_enabled': getattr(qmc, 'autoCHARGEenabled', False),
-                'auto_dry_enabled': getattr(qmc, 'autoDRYenabled', False),
-                'auto_fc_enabled': getattr(qmc, 'autoFCsenabled', False),
-                'auto_drop_enabled': getattr(qmc, 'autoDROPenabled', False),
-                'charge_timer_flag': getattr(qmc, 'chargeTimerFlag', False),
-                'auto_charge_flag': getattr(qmc, 'autoChargeFlag', False),
-                'auto_drop_flag': getattr(qmc, 'autoDropFlag', False),
-                'mark_tp_flag': getattr(qmc, 'markTPflag', False),
-                'auto_dry_flag': getattr(qmc, 'autoDRYflag', False),
-                'auto_fcs_flag': getattr(qmc, 'autoFCsFlag', False),
-                'delta_et_flag': getattr(qmc, 'DeltaETflag', False),
-                'delta_bt_flag': getattr(qmc, 'DeltaBTflag', False),
-                'pid_button_flag': getattr(qmc, 'PIDbuttonflag', False),
-                'control_button_flag': getattr(qmc, 'Controlbuttonflag', False)
-            }
-            
-            # Connection status
-            monitoring_state['connection_status'] = {
-                'phidget_devices_connected': len(getattr(qmc, 'phidgetDevices', [])) if hasattr(qmc, 'phidgetDevices') else 0,
-                'non_serial_devices_connected': len(getattr(qmc, 'nonSerialDevices', [])) if hasattr(qmc, 'nonSerialDevices') else 0,
-                'non_temp_devices_connected': len(getattr(qmc, 'nonTempDevices', [])) if hasattr(qmc, 'nonTempDevices') else 0,
-                'special_devices_connected': len(getattr(qmc, 'specialDevices', [])) if hasattr(qmc, 'specialDevices') else 0,
-                'binary_devices_connected': len(getattr(qmc, 'binaryDevices', [])) if hasattr(qmc, 'binaryDevices') else 0,
-                'extra_devices_connected': len(getattr(qmc, 'extradevices', [])) if hasattr(qmc, 'extradevices') else 0
-            }
-            
+            self.logger.info("Roast started - beginning data broadcast")
+            self.metrics.start_time = datetime.now()
+            self._broadcast_roast_event("roast_start")
         except Exception as e:
-            self.logger.error(f"Error getting monitoring state: {e}")
-        
-        return monitoring_state
-    
-    def _get_extra_sensor_values(self, qmc) -> Dict[str, Any]:
-        """Get current values from extra sensors"""
-        sensor_values = {
-            'extra1_sensors': {},
-            'extra2_sensors': {},
-            'all_sensors': {}
-        }
-        
+            self._record_error("RoastStartError", str(e))
+
+    def _on_roast_end_impl(self) -> None:
+        """Handle roast end"""
         try:
-            # Get extra temperature 1 sensors
-            if hasattr(qmc, 'extratemp1') and hasattr(qmc, 'extraname1'):
-                for i, temp_list in enumerate(qmc.extratemp1):
-                    if temp_list and len(temp_list) > 0:
-                        sensor_name = qmc.extraname1[i] if i < len(qmc.extraname1) else f"Extra1_{i}"
-                        current_temp = self._safe_get_temp(temp_list)
-                        
-                        sensor_values['extra1_sensors'][f"sensor_{i}"] = {
-                            'name': sensor_name,
-                            'temperature': current_temp,
-                            'unit': '°F'
-                        }
-                        
-                        sensor_values['all_sensors'][sensor_name] = {
-                            'type': 'extra1',
-                            'index': i,
-                            'temperature': current_temp,
-                            'unit': '°F'
-                        }
-            
-            # Get extra temperature 2 sensors
-            if hasattr(qmc, 'extratemp2') and hasattr(qmc, 'extraname2'):
-                for i, temp_list in enumerate(qmc.extratemp2):
-                    if temp_list and len(temp_list) > 0:
-                        sensor_name = qmc.extraname2[i] if i < len(qmc.extraname2) else f"Extra2_{i}"
-                        current_temp = self._safe_get_temp(temp_list)
-                        
-                        sensor_values['extra2_sensors'][f"sensor_{i}"] = {
-                            'name': sensor_name,
-                            'temperature': current_temp,
-                            'unit': '°F'
-                        }
-                        
-                        sensor_values['all_sensors'][sensor_name] = {
-                            'type': 'extra2',
-                            'index': i,
-                            'temperature': current_temp,
-                            'unit': '°F'
-                        }
-            
+            self.logger.info("Roast ended - finalizing data broadcast")
+            if self.metrics.start_time:
+                self.metrics.total_uptime += (
+                    datetime.now() - self.metrics.start_time
+                ).total_seconds()
+            self._broadcast_roast_event("roast_end")
         except Exception as e:
-            self.logger.error(f"Error getting extra sensor values: {e}")
-        
-        return sensor_values
-    
-    def _safe_get_uptime(self, qmc) -> float:
-        """Safely get uptime value"""
+            self._record_error("RoastEndError", str(e))
+
+    def _on_data_update_impl(self, data: Dict[str, Any]) -> None:
+        """Handle data updates"""
         try:
-            if hasattr(qmc, 'timeclock'):
-                timeclock = qmc.timeclock
-                if hasattr(timeclock, 'total_seconds'):
-                    return timeclock.total_seconds()
-                elif isinstance(timeclock, (int, float)):
-                    return float(timeclock)
-                else:
-                    return float(timeclock) if timeclock else 0.0
-            else:
-                return 0.0
-        except (ValueError, TypeError, AttributeError):
-            return 0.0
-    
-    def _broadcast_roast_data(self, data: Dict[str, Any]) -> None:
-        """Broadcast roast data to connected clients"""
-        # if not self.broadcaster or not self.broadcaster.is_connected():
-        #     self.logger.debug("Cannot broadcast roast data: broadcaster not connected")
-        #     return
-        if not self.broadcaster or not self.broadcaster.is_running:
-            self.logger.debug("Cannot broadcast roast data: broadcaster not running")
-            return
-            
-        try:
-            message = {
-                'type': 'roast_data',
-                'data': data,
-                'timestamp': time.time()
-            }
-            
-            self.broadcaster.broadcast(json.dumps(message))
-            self.logger.debug("Broadcasted roast data")
-            
+            self._broadcast_roast_data(data)
         except Exception as e:
-            self.logger.error(f"Error broadcasting roast data: {e}")
-    
-    def _broadcast_monitoring_data(self) -> None:
-        """Broadcast monitoring state data independently of roast data"""
+            self._record_error("DataUpdateError", str(e), {"data_keys": list(data.keys())})
+
+    def _check_roast_state(self) -> None:
+        """Check roast state"""
         try:
-            if not WEBSOCKETS_AVAILABLE or not self.broadcaster or not self.broadcaster.is_running:
+            if not hasattr(self.main_window, "qmc"):
                 return
-                
-            if not self.main_window or not hasattr(self.main_window, 'qmc'):
-                return
-                
+
             qmc = self.main_window.qmc
-            
-            # Only broadcast if monitoring is active
-            if not getattr(qmc, 'flagon', False):
-                self.logger.info("Monitoring is not active, skipping broadcast")
-                return
-            
-            self.logger.info("Broadcasting monitoring data")
 
-            self.logger.info(f"temp1 exists: {hasattr(qmc, 'temp1')}, temp1 length: {len(qmc.temp1) if hasattr(qmc, 'temp1') else 'N/A'}")
-            self.logger.info(f"temp2 exists: {hasattr(qmc, 'temp2')}, temp2 length: {len(qmc.temp2) if hasattr(qmc, 'temp2') else 'N/A'}")
-            
-            et_active = hasattr(qmc, 'temp1') and qmc.temp1 and len(qmc.temp1) > 0
-            bt_active = hasattr(qmc, 'temp2') and qmc.temp2 and len(qmc.temp2) > 0
-            
-            # Get current temp values
-            et_temp = self._safe_get_temp(qmc.temp1) if et_active else None
-            bt_temp = self._safe_get_temp(qmc.temp2) if bt_active else None
-            
-            self.logger.info(f"ET active: {et_active}, ET temp: {et_temp}")
-            self.logger.info(f"BT active: {bt_active}, BT temp: {bt_temp}")
-            
+            # Check if roasting has started
+            if hasattr(qmc, "flagstart") and qmc.flagstart:
+                if not hasattr(self, "_roast_started") or not self._roast_started:
+                    self._roast_started = True
+                    self._on_roast_start_impl()
+
+            # Check if roasting has ended
+            elif hasattr(self, "_roast_started") and self._roast_started:
+                self._roast_started = False
+                self._on_roast_end_impl()
+
+        except Exception as e:
+            self._record_error("RoastStateCheckError", str(e))
+
+    def _check_event_states(self) -> None:
+        """Check event states"""
+        try:
+            if not hasattr(self.main_window, "qmc"):
+                return
+
+            qmc = self.main_window.qmc
+
+            # Check each event state
+            for event_name, last_state in self.last_event_states.items():
+                current_state = self._get_event_state(qmc, event_name)
+                if current_state != last_state:
+                    self.last_event_states[event_name] = current_state
+                if current_state:
+                    self._broadcast_roast_event(event_name)
+
+        except Exception as e:
+            self._record_error("EventStateCheckError", str(e))
+
+    def _get_event_state(self, qmc, event_name: str) -> bool:
+        """Get current state of an event"""
+        try:
+            # Map event names to qmc attributes
+            event_map = {
+                "charge": "timeindex",
+                "dry_end": "timeindex",
+                "fc_start": "timeindex",
+                "fc_end": "timeindex",
+                "sc_start": "timeindex",
+                "sc_end": "timeindex",
+                "drop": "timeindex",
+                "cool_end": "timeindex",
+            }
+
+            if event_name in event_map:
+                attr_name = event_map[event_name]
+                if hasattr(qmc, attr_name):
+                    timeindex = getattr(qmc, attr_name)
+                    # Check if the specific event index is set
+                    event_indices = {
+                        "charge": 0,
+                        "dry_end": 1,
+                        "fc_start": 2,
+                        "fc_end": 3,
+                        "sc_start": 4,
+                        "sc_end": 5,
+                        "drop": 6,
+                        "cool_end": 7,
+                    }
+                    if event_name in event_indices:
+                        return (
+                            len(timeindex) > event_indices[event_name]
+                            and timeindex[event_indices[event_name]] != -1
+                        )
+
+            return False
+
+        except Exception as e:
+            self._record_error("EventStateError", str(e), {"event_name": event_name})
+            return False
+
+    def _on_charge_event(self, noaction: bool = False) -> None:
+        """Handle charge event"""
+        try:
+            if not noaction:
+                self._broadcast_roast_event("charge")
+        except Exception as e:
+            self._record_error("ChargeEventError", str(e))
+
+    def _on_dry_end_event(self, noaction: bool = False) -> None:
+        """Handle dry end event"""
+        try:
+            if not noaction:
+                self._broadcast_roast_event("dry_end")
+        except Exception as e:
+            self._record_error("DryEndEventError", str(e))
+
+    def _on_fc_start_event(self, noaction: bool = False) -> None:
+        """Handle FC start event"""
+        try:
+            if not noaction:
+                self._broadcast_roast_event("fc_start")
+        except Exception as e:
+            self._record_error("FCStartEventError", str(e))
+
+    def _on_fc_end_event(self, noaction: bool = False) -> None:
+        """Handle FC end event"""
+        try:
+            if not noaction:
+                self._broadcast_roast_event("fc_end")
+        except Exception as e:
+            self._record_error("FCEndEventError", str(e))
+
+    def _on_sc_start_event(self, noaction: bool = False) -> None:
+        """Handle SC start event"""
+        try:
+            if not noaction:
+                self._broadcast_roast_event("sc_start")
+        except Exception as e:
+            self._record_error("SCStartEventError", str(e))
+
+    def _on_sc_end_event(self, noaction: bool = False) -> None:
+        """Handle SC end event"""
+        try:
+            if not noaction:
+                self._broadcast_roast_event("sc_end")
+        except Exception as e:
+            self._record_error("SCEndEventError", str(e))
+
+    def _on_drop_event(self, noaction: bool = False) -> None:
+        """Handle drop event"""
+        try:
+            if not noaction:
+                self._broadcast_roast_event("drop")
+        except Exception as e:
+            self._record_error("DropEventError", str(e))
+
+    def _on_cool_end_event(self, noaction: bool = False) -> None:
+        """Handle cool end event"""
+        try:
+            if not noaction:
+                self._broadcast_roast_event("cool_end")
+        except Exception as e:
+            self._record_error("CoolEndEventError", str(e))
+
+    def _on_custom_event(self, event_index: int) -> None:
+        """Handle custom event"""
+        try:
+            if not hasattr(self.main_window, "qmc"):
+                return
+
+            qmc = self.main_window.qmc
+
+            # Get custom event data
+            event_data = self._get_custom_event_data(qmc, event_index)
+            if event_data:
+                self._broadcast_custom_event(event_data)
+
+        except Exception as e:
+            self._record_error("CustomEventError", str(e), {"event_index": event_index})
+
+    def _get_custom_event_data(self, qmc, event_index: int) -> Optional[Dict[str, Any]]:
+        """Get custom event data"""
+        try:
+            if not hasattr(qmc, "etypesf") or not hasattr(qmc, "eventsvalues"):
+                return None
+
+            event_type = qmc.etypesf(event_index)
+            event_value = qmc.eventsvalues(event_index)
+
+            return {
+                "type": "custom_event",
+                "event_type": event_type,
+                "event_value": event_value,
+                "event_index": event_index,
+                "timestamp": time.time(),
+            }
+
+        except Exception as e:
+            self._record_error("CustomEventDataError", str(e), {"event_index": event_index})
+            return None
+
+    def _on_data_update(self) -> None:
+        """Handle data updates"""
+        try:
+            if not hasattr(self.main_window, "qmc"):
+                return
+
+            qmc = self.main_window.qmc
+
+            # Get current roast data
+            roast_data = self._get_current_roast_data()
+            if roast_data:
+                self._broadcast_roast_data(roast_data)
+
+        except Exception as e:
+            self._record_error("DataUpdateError", str(e))
+
+    def _safe_get_timeindex(self, qmc, index: int) -> Optional[float]:
+        """Safely get time index"""
+        try:
+            if hasattr(qmc, "timeindex") and len(qmc.timeindex) > index:
+                return qmc.timeindex[index]
+            return None
+        except Exception as e:
+            self._record_error("TimeIndexError", str(e), {"index": index})
+        return None
+
+    def _safe_get_weight(self, qmc, index: int) -> float:
+        """Safely get weight"""
+        try:
+            if hasattr(qmc, "weight") and len(qmc.weight) > index:
+                return qmc.weight[index]
+            return 0.0
+        except Exception as e:
+            self._record_error("WeightError", str(e), {"index": index})
+        return 0.0
+
+    def _safe_get_temp(self, temp_list, index: int = -1) -> Optional[float]:
+        """Safely get temperature"""
+        try:
+            if temp_list and len(temp_list) > abs(index):
+                return temp_list[index]
+            return None
+        except Exception as e:
+            self._record_error(
+                "TemperatureError",
+                str(e),
+                {"index": index, "list_length": len(temp_list) if temp_list else 0},
+            )
+        return None
+
+    def _get_current_roast_data(self) -> Optional[Dict[str, Any]]:
+        """Get current roast data with comprehensive error handling"""
+        try:
+            if not hasattr(self.main_window, "qmc"):
+                return None
+
+            qmc = self.main_window.qmc
+
+            # Get basic roast data
+            roast_data = {
+                "type": "roast_data",
+                "timestamp": time.time(),
+                "current_temperatures": {},
+                "rate_of_rise": {},
+                "roast_time": 0,
+                "roast_state": {
+                    "is_roasting": getattr(qmc, "flagstart", False),
+                    "is_monitoring": getattr(qmc, "flagon", False),
+                },
+            }
+
+            # Get temperatures
+            try:
+                if hasattr(qmc, "temp1") and qmc.temp1:
+                    roast_data["current_temperatures"]["et"] = self._safe_get_temp(qmc.temp1)
+                if hasattr(qmc, "temp2") and qmc.temp2:
+                    roast_data["current_temperatures"]["bt"] = self._safe_get_temp(qmc.temp2)
+            except Exception as e:
+                self._record_error("TemperatureDataError", str(e))
+
+            # Get rate of rise
+            try:
+                if hasattr(qmc, "rateofchange1"):
+                    roast_data["rate_of_rise"]["et"] = qmc.rateofchange1
+                if hasattr(qmc, "rateofchange2"):
+                    roast_data["rate_of_rise"]["bt"] = qmc.rateofchange2
+            except Exception as e:
+                self._record_error("RateOfRiseError", str(e))
+
+            # Get roast time
+            try:
+                if hasattr(qmc, "timex") and qmc.timex:
+                    roast_data["roast_time"] = qmc.timex[-1] if qmc.timex else 0
+            except Exception as e:
+                self._record_error("RoastTimeError", str(e))
+
+            # Get events
+            try:
+                events = {}
+                event_names = [
+                    "charge",
+                    "dry_end",
+                    "fc_start",
+                    "fc_end",
+                    "sc_start",
+                    "sc_end",
+                    "drop",
+                    "cool_end",
+                ]
+                for i, event_name in enumerate(event_names):
+                    time_index = self._safe_get_timeindex(qmc, i)
+                    if time_index is not None and time_index != -1:
+                        events[event_name] = {
+                            "time": time_index,
+                            "temperature": (
+                                self._safe_get_temp(qmc.temp2, int(time_index))
+                                if hasattr(qmc, "temp2")
+                                else None
+                            ),
+                        }
+                roast_data["events"] = events
+            except Exception as e:
+                self._record_error("EventsDataError", str(e))
+
+            # Get extra temperatures
+            try:
+                roast_data["extra_temperatures"] = self._get_extra_temperatures(qmc)
+            except Exception as e:
+                self._record_error("ExtraTemperaturesError", str(e))
+
             # Get monitoring state
             try:
-                monitoring_state = self._get_monitoring_state(qmc)
+                roast_data["monitoring_state"] = self._get_monitoring_state(qmc)
             except Exception as e:
-                self.logger.error(f"Error getting monitoring state: {e}")
-                return
-            
-            message = {
-                'type': 'monitoring_data',
-                'data': {
-                    'monitoring_state': monitoring_state,
-                    'timestamp': time.time()
-                }
-            }
-            
-            self.broadcaster.broadcast(json.dumps(message))
-            self.logger.debug("Broadcasted monitoring data")
-            
+                self._record_error("MonitoringStateError", str(e))
+
+            return roast_data
+
         except Exception as e:
-            self.logger.error(f"Error in _broadcast_monitoring_data: {e}")
+            self._record_error("RoastDataError", str(e))
+            return None
+
+    def _get_extra_temperatures(self, qmc) -> Dict[str, Any]:
+        """Get extra temperatures"""
+        try:
+            extra_data = {"sensors": [], "total_sensors": 0}
+
+            # Get extra temperature data
+            if hasattr(qmc, "extratemp1") and hasattr(qmc, "extratemp2"):
+                sensors = []
+
+                # Process extra1 temperatures
+                for i, temp in enumerate(qmc.extratemp1):
+                    if temp is not None and temp != 0:
+                        sensor_name = (
+                            f"Extra1_{i}"
+                            if not hasattr(qmc, "extraname1") or i >= len(qmc.extraname1)
+                            else qmc.extraname1[i]
+                        )
+                        sensors.append(
+                            {
+                                "name": sensor_name,
+                                "type": "extra1",
+                                "index": i,
+                                "temperature": temp,
+                                "unit": "°F",
+                            }
+                        )
+
+                # Process extra2 temperatures
+                for i, temp in enumerate(qmc.extratemp2):
+                    if temp is not None and temp != 0:
+                        sensor_name = (
+                            f"Extra2_{i}"
+                            if not hasattr(qmc, "extraname2") or i >= len(qmc.extraname2)
+                            else qmc.extraname2[i]
+                        )
+                        sensors.append(
+                            {
+                                "name": sensor_name,
+                                "type": "extra2",
+                                "index": i,
+                                "temperature": temp,
+                                "unit": "°F",
+                            }
+                        )
+
+                extra_data["sensors"] = sensors
+                extra_data["total_sensors"] = len(sensors)
+
+            return extra_data
+
+        except Exception as e:
+            self._record_error("ExtraTemperaturesError", str(e))
+            return {"sensors": [], "total_sensors": 0}
+
+    def _get_monitoring_state(self, qmc) -> Dict[str, Any]:
+        """Get monitoring state"""
+        try:
+            monitoring_state = {
+                "system_status": {},
+                "device_status": {},
+                "sensor_status": {},
+                "sensor_values": {},
+                "flags": {},
+                "connection_status": {},
+            }
+
+            # System status
+            try:
+                monitoring_state["system_status"] = {
+                    "is_monitoring": getattr(qmc, "flagon", False),
+                    "is_roasting": getattr(qmc, "flagstart", False),
+                    "is_sampling": getattr(qmc, "flagstart", False),
+                    "is_sampling_thread_running": getattr(qmc, "sampling_thread_running", False),
+                    "is_keep_on": getattr(qmc, "keep_on", False),
+                    "is_open_completed": getattr(qmc, "open_completed", False),
+                    "uptime": self._safe_get_uptime(qmc),
+                }
+            except Exception as e:
+                self._record_error("SystemStatusError", str(e))
+
+            # Device status
+            try:
+                monitoring_state["device_status"] = {
+                    "device_type": getattr(qmc, "device", 0),
+                    "device_logging": getattr(qmc, "device_logging", False),
+                    "device_log_file": getattr(qmc, "device_log_file", ""),
+                    "phidget_manager_active": getattr(qmc, "phidget_manager_active", False),
+                    "yocto_remote_flag": getattr(qmc, "yocto_remote_flag", False),
+                    "phidget_remote_flag": getattr(qmc, "phidget_remote_flag", False),
+                }
+            except Exception as e:
+                self._record_error("DeviceStatusError", str(e))
+
+            # Sensor status
+            try:
+                monitoring_state["sensor_status"] = {
+                    "et_sensor_active": bool(getattr(qmc, "temp1", [])),
+                    "bt_sensor_active": bool(getattr(qmc, "temp2", [])),
+                    "extra_sensors_count": len(getattr(qmc, "extratemp1", []))
+                    + len(getattr(qmc, "extratemp2", [])),
+                    "ambient_sensor_active": getattr(qmc, "ambientTemp", None) is not None,
+                    "pressure_sensor_active": getattr(qmc, "pressure", None) is not None,
+                    "humidity_sensor_active": getattr(qmc, "humidity", None) is not None,
+                }
+            except Exception as e:
+                self._record_error("SensorStatusError", str(e))
+
+            # Sensor values
+            try:
+                monitoring_state["sensor_values"] = self._get_extra_sensor_values(qmc)
+            except Exception as e:
+                self._record_error("SensorValuesError", str(e))
+
+            # Flags
+            try:
+                monitoring_state["flags"] = {
+                    "auto_charge_enabled": getattr(qmc, "auto_charge_enabled", False),
+                    "auto_dry_enabled": getattr(qmc, "auto_dry_enabled", False),
+                    "auto_fc_enabled": getattr(qmc, "auto_fc_enabled", False),
+                    "auto_drop_enabled": getattr(qmc, "auto_drop_enabled", False),
+                    "charge_timer_flag": getattr(qmc, "charge_timer_flag", False),
+                    "auto_charge_flag": getattr(qmc, "auto_charge_flag", False),
+                    "auto_drop_flag": getattr(qmc, "auto_drop_flag", False),
+                    "mark_tp_flag": getattr(qmc, "mark_tp_flag", False),
+                    "auto_dry_flag": getattr(qmc, "auto_dry_flag", False),
+                    "auto_fcs_flag": getattr(qmc, "auto_fcs_flag", False),
+                    "delta_et_flag": getattr(qmc, "delta_et_flag", False),
+                    "delta_bt_flag": getattr(qmc, "delta_bt_flag", False),
+                    "pid_button_flag": getattr(qmc, "pid_button_flag", False),
+                    "control_button_flag": getattr(qmc, "control_button_flag", False),
+                }
+            except Exception as e:
+                self._record_error("FlagsError", str(e))
+
+            # Connection status
+            try:
+                monitoring_state["connection_status"] = {
+                    "phidget_devices_connected": getattr(qmc, "phidget_devices_connected", 0),
+                    "non_serial_devices_connected": getattr(qmc, "non_serial_devices_connected", 0),
+                    "non_temp_devices_connected": getattr(qmc, "non_temp_devices_connected", 0),
+                    "special_devices_connected": getattr(qmc, "special_devices_connected", 0),
+                    "binary_devices_connected": getattr(qmc, "binary_devices_connected", 0),
+                    "extra_devices_connected": getattr(qmc, "extra_devices_connected", 0),
+                }
+            except Exception as e:
+                self._record_error("ConnectionStatusError", str(e))
+
+            return monitoring_state
+
+        except Exception as e:
+            self._record_error("MonitoringStateError", str(e))
+            return {}
+
+    def _get_extra_sensor_values(self, qmc) -> Dict[str, Any]:
+        """Get extra sensor values"""
+        try:
+            sensor_values = {
+                "et_temperature": None,
+                "bt_temperature": None,
+                "ambient_temperature": None,
+                "ambient_pressure": None,
+                "ambient_humidity": None,
+                "extra_sensors": {"extra1_sensors": {}, "extra2_sensors": {}, "all_sensors": {}},
+            }
+
+            # Get ET and BT temperatures
+            try:
+                if hasattr(qmc, "RTtemp1"):
+                    sensor_values["et_temperature"] = qmc.RTtemp1
+                if hasattr(qmc, "RTtemp2"):
+                    sensor_values["bt_temperature"] = qmc.RTtemp2
+            except Exception as e:
+                self._record_error("ETBTError", str(e))
+
+            # Get ambient values
+            try:
+                if hasattr(qmc, "ambientTemp"):
+                    sensor_values["ambient_temperature"] = qmc.ambientTemp
+                if hasattr(qmc, "pressure"):
+                    sensor_values["ambient_pressure"] = qmc.pressure
+                if hasattr(qmc, "humidity"):
+                    sensor_values["ambient_humidity"] = qmc.humidity
+            except Exception as e:
+                self._record_error("AmbientError", str(e))
+
+            # Get extra sensor values
+            try:
+                if hasattr(qmc, "extratemp1"):
+                    for i, temp in enumerate(qmc.extratemp1):
+                        if temp is not None and temp != 0:
+                            sensor_name = f"sensor_{i}"
+                            if hasattr(qmc, "extraname1") and i < len(qmc.extraname1):
+                                sensor_name = qmc.extraname1[i] or f"sensor_{i}"
+
+                            sensor_values["extra_sensors"]["extra1_sensors"][sensor_name] = {
+                                "name": sensor_name,
+                                "temperature": temp,
+                                "unit": "°F",
+                            }
+
+                            sensor_values["extra_sensors"]["all_sensors"][sensor_name] = {
+                                "type": "extra1",
+                                "index": i,
+                                "temperature": temp,
+                                "unit": "°F",
+                            }
+
+                if hasattr(qmc, "extratemp2"):
+                    for i, temp in enumerate(qmc.extratemp2):
+                        if temp is not None and temp != 0:
+                            sensor_name = f"sensor_{i}"
+                            if hasattr(qmc, "extraname2") and i < len(qmc.extraname2):
+                                sensor_name = qmc.extraname2[i] or f"sensor_{i}"
+
+                            sensor_values["extra_sensors"]["extra2_sensors"][sensor_name] = {
+                                "name": sensor_name,
+                                "temperature": temp,
+                                "unit": "°F",
+                            }
+
+                            sensor_values["extra_sensors"]["all_sensors"][sensor_name] = {
+                                "type": "extra2",
+                                "index": i,
+                                "temperature": temp,
+                                "unit": "°F",
+                            }
+            except Exception as e:
+                self._record_error("ExtraSensorValuesError", str(e))
+
+            return sensor_values
+
+        except Exception as e:
+            self._record_error("SensorValuesError", str(e))
+            return {}
+
+    def _safe_get_uptime(self, qmc) -> float:
+        """Safely get uptime"""
+        try:
+            if hasattr(qmc, "uptime"):
+                return qmc.uptime
+            return 0.0
+        except Exception as e:
+            self._record_error("UptimeError", str(e))
+            return 0.0
+
+    def _broadcast_roast_data(self, data: Dict[str, Any]) -> None:
+        """Broadcast roast data"""
+        try:
+            if not self.broadcaster or not self.broadcaster.is_running:
+                return
+
+            message = json.dumps(data)
+            self.broadcaster.broadcast(message)
+
+            # Update metrics
+            self.metrics.messages_sent += 1
+            self.metrics.bytes_sent += len(message.encode("utf-8"))
+            self.metrics.last_send_time = datetime.now()
+
+        except Exception as e:
+            self._record_error("BroadcastDataError", str(e))
+            self.metrics.messages_failed += 1
+            self.consecutive_failures += 1
+
+    def _broadcast_monitoring_data(self) -> None:
+        """Broadcast monitoring data"""
+        try:
+            if not hasattr(self.main_window, "qmc"):
+                return
+
+            qmc = self.main_window.qmc
+
+            # Get monitoring state
+            monitoring_state = self._get_monitoring_state(qmc)
+
+            # Create monitoring message
+            monitoring_data = {
+                "type": "monitoring_data",
+                "monitoring_state": monitoring_state,
+                "timestamp": time.time(),
+            }
+
+            self._broadcast_roast_data(monitoring_data)
+
+        except Exception as e:
+            self._record_error("MonitoringDataError", str(e))
 
     def _broadcast_roast_event(self, event_type: str) -> None:
-        """Broadcast roast lifecycle events"""
-        # if not self.broadcaster or not self.broadcaster.is_connected():
-        #     self.logger.debug(f"Cannot broadcast roast event {event_type}: broadcaster not connected")
-        #     return
-        if not self.broadcaster or not self.broadcaster.is_running:
-            self.logger.debug(f"Cannot broadcast roast event {event_type}: broadcaster not running")
-            return
-            
+        """Broadcast roast event"""
         try:
-            message = {
-                'type': 'roast_event',
-                'event': event_type,
-                'timestamp': time.time()
-            }
-            
-            self.broadcaster.broadcast(json.dumps(message))
-            self.logger.info(f"Broadcasted roast event: {event_type}")
-            
-        except Exception as e:
-            self.logger.error(f"Error broadcasting roast event: {e}")
-    
-    def _broadcast_event(self, event_name: str) -> None:
-        """Broadcast standard roast events"""
-        # if not self.broadcaster or not self.broadcaster.is_connected():
-        #     self.logger.debug(f"Cannot broadcast event {event_name}: broadcaster not connected")
-        #     return
-        if not self.broadcaster or not self.broadcaster.is_running:
-            self.logger.debug(f"Cannot broadcast event {event_name}: broadcaster not running")
-            return
-            
-        try:
-            # Get event data
-            event_data = self._get_event_data(event_name)
-            
-            message = {
-                'type': 'roast_event',
-                'event': event_name,
-                'data': event_data,
-                'timestamp': time.time()
-            }
-            
-            self.broadcaster.broadcast(json.dumps(message))
-            self.logger.info(f"Broadcasted {event_name} event")
-            
-        except Exception as e:
-            self.logger.error(f"Error broadcasting {event_name} event: {e}")
-    
-    def _broadcast_custom_event(self, event_data: Dict[str, Any]) -> None:
-        """Broadcast custom events"""
-        # if not self.broadcaster or not self.broadcaster.is_connected():
-        #     self.logger.debug("Cannot broadcast custom event: broadcaster not connected")
-        #     return
-        if not self.broadcaster or not self.broadcaster.is_running:
-            self.logger.debug("Cannot broadcast custom event: broadcaster not running")
-            return
-            
-        try:
-            message = {
-                'type': 'custom_event',
-                'data': event_data,
-                'timestamp': time.time()
-            }
-            
-            self.broadcaster.broadcast(json.dumps(message))
-            self.logger.info(f"Broadcasted custom event: {event_data.get('description', 'Unknown')}")
-            
-        except Exception as e:
-            self.logger.error(f"Error broadcasting custom event: {e}")
-    
-    def _get_event_data(self, event_name: str) -> Dict[str, Any]:
-        """Get data for a specific event"""
-        if not self.main_window or not hasattr(self.main_window, 'qmc'):
-            return {}
-            
-        qmc = self.main_window.qmc
-        
-        # Map event names to timeindex positions
-        event_map = {
-            'charge': 0,
-            'dry_end': 1,
-            'fc_start': 2,
-            'fc_end': 3,
-            'sc_start': 4,
-            'sc_end': 5,
-            'drop': 6,
-            'cool_end': 7
-        }
-        
-        if event_name not in event_map:
-            return {}
-            
-        timeindex_idx = event_map[event_name]
-        event_time = self._safe_get_timeindex(qmc, timeindex_idx)
-        event_temp = self._safe_get_temp(qmc.temp2, qmc.timeindex[timeindex_idx]) if qmc.timeindex[timeindex_idx] > -1 else None
-        
-        # Calculate time since charge
-        time_since_charge = None
-        if event_time is not None and qmc.timeindex[0] > -1:
-            charge_time = qmc.timex[qmc.timeindex[0]]
-            time_since_charge = event_time - charge_time
-        
-        return {
-            'event_name': event_name,
-            'time': event_time,
-            'time_since_charge': time_since_charge,
-            'temperature': event_temp,
-            'roast_time': qmc.timex[-1] if qmc.timex else 0
-        }
-    
-    def _start_broadcaster(self) -> None:
-        """Start the WebSocket broadcaster"""
-        if not WEBSOCKETS_AVAILABLE:
-            self.logger.error("Cannot start broadcaster: websockets library not available")
-            return
-            
-        try:
-            if self.broadcaster is None:
-                self.broadcaster = WebSocketBroadcaster(
-                    host=self.config.server_host,
-                    port=self.config.server_port,
-                    path=self.config.server_path,
-                    reconnect_interval=self.config.reconnect_interval,
-                    max_reconnect_attempts=self.config.max_reconnect_attempts
-                )
+            if not self.broadcaster or not self.broadcaster.is_running:
+                return
 
-                 # Register the message callback
-                self.broadcaster.add_message_callback(self._on_ws_message)
-                print("LiveBroadcastPlugin: WebSocket message callback registered")
-                self.logger.info("LiveBroadcastPlugin: WebSocket message callback registered")
-                
-                # Connect status signals
-                self.broadcaster.connected.connect(lambda: self._update_status("Connected"))
-                self.broadcaster.disconnected.connect(lambda: self._update_status("Disconnected"))
-                self.broadcaster.error.connect(lambda msg: self._update_status(f"Error: {msg}"))
-            
-            self.broadcaster.start()
-            self._update_status("Connecting...")
-            self.logger.info(f"Started broadcaster to {self.config.server_host}:{self.config.server_port}{self.config.server_path}")
-            
+            event_data = self._get_event_data(event_type)
+            if event_data:
+                self._broadcast_roast_data(event_data)
+
         except Exception as e:
-            self.logger.error(f"Error starting broadcaster: {e}")
-            self._update_status(f"Error: {e}")
-    
+            self._record_error("BroadcastEventError", str(e), {"event_type": event_type})
+
+    def _broadcast_event(self, event_name: str) -> None:
+        """Broadcast event"""
+        try:
+            if not self.broadcaster or not self.broadcaster.is_running:
+                return
+
+            event_data = {"type": "roast_event", "event": event_name, "timestamp": time.time()}
+
+            # Add event-specific data
+            if hasattr(self.main_window, "qmc"):
+                qmc = self.main_window.qmc
+                event_data["data"] = {
+                    "time": self._safe_get_uptime(qmc),
+                    "temperature": (
+                        self._safe_get_temp(qmc.temp2) if hasattr(qmc, "temp2") else None
+                    ),
+                }
+
+            self._broadcast_roast_data(event_data)
+
+        except Exception as e:
+            self._record_error("BroadcastEventError", str(e), {"event_name": event_name})
+
+    def _broadcast_custom_event(self, event_data: Dict[str, Any]) -> None:
+        """Broadcast custom event"""
+        try:
+            if not self.broadcaster or not self.broadcaster.is_running:
+                return
+
+            custom_data = {
+                "type": "custom_event",
+                "event_data": event_data,
+                "timestamp": time.time(),
+            }
+
+            self._broadcast_roast_data(custom_data)
+
+        except Exception as e:
+            self._record_error("BroadcastCustomEventError", str(e))
+
+    def _get_event_data(self, event_name: str) -> Dict[str, Any]:
+        """Get event data"""
+        try:
+            if not hasattr(self.main_window, "qmc"):
+                return {}
+
+            qmc = self.main_window.qmc
+
+            event_data = {
+                "type": "roast_event",
+                "event": event_name,
+                "data": {
+                    "time": self._safe_get_uptime(qmc),
+                    "temperature": (
+                        self._safe_get_temp(qmc.temp2) if hasattr(qmc, "temp2") else None
+                    ),
+                },
+            }
+
+            return event_data
+
+        except Exception as e:
+            self._record_error("EventDataError", str(e), {"event_name": event_name})
+            return {}
+
+    def _start_broadcaster(self) -> None:
+        """Start broadcaster"""
+        try:
+            if self.broadcaster and self.broadcaster.is_running:
+                self.logger.info("Broadcaster already running")
+                return
+
+            self._change_broadcast_state(BroadcastState.CONNECTING)
+
+            self.broadcaster = WebSocketBroadcaster(
+                host=self.config.server_host,
+                port=self.config.server_port,
+                path=self.config.server_path,
+                reconnect_interval=self.config.reconnect_interval,
+                max_reconnect_attempts=self.config.max_reconnect_attempts,
+            )
+
+            # Add connection handlers
+            self.broadcaster.add_connection_handler(self._on_connected)
+            self.broadcaster.add_disconnection_handler(self._on_disconnected)
+
+            # Add message callback
+            self.broadcaster.add_message_callback(self._on_ws_message)
+
+            # Start broadcaster
+            self.broadcaster.start()
+
+            self.metrics.connection_attempts += 1
+            self.logger.info("Broadcaster started successfully")
+
+        except Exception as e:
+            self._record_error("StartBroadcasterError", str(e))
+            self._change_broadcast_state(BroadcastState.ERROR)
+            self.metrics.failed_connections += 1
+
     def _stop_broadcaster(self) -> None:
-        """Stop the WebSocket broadcaster"""
-        if self.broadcaster:
-            try:
+        """Stop broadcaster"""
+        try:
+            if self.broadcaster:
                 self.broadcaster.stop()
-                self._update_status("Disconnected")
-                self.logger.info("Stopped broadcaster")
-            except Exception as e:
-                self.logger.error(f"Error stopping broadcaster: {e}")
-    
+                self.broadcaster = None
+
+            self._change_broadcast_state(BroadcastState.DISCONNECTED)
+            self.logger.info("Broadcaster stopped")
+
+        except Exception as e:
+            self._record_error("StopBroadcasterError", str(e))
+
+    def _on_connected(self) -> None:
+        """Handle connection"""
+        try:
+            self._change_broadcast_state(BroadcastState.CONNECTED)
+            self.metrics.successful_connections += 1
+            self.consecutive_failures = 0
+            self.logger.info("Connected to broadcast server")
+
+            # # Send notification if not in headless mode
+            # if not self.headless_mode and hasattr(self.main_window, "sendNotificationMessage"):
+            #     self.main_window.sendNotificationMessage(
+            #         "Live Broadcast",
+            #         "Connected to broadcast server",
+            #         NotificationType.ARTISAN_SYSTEM,
+            #     )
+
+        except Exception as e:
+            self._record_error("ConnectionHandlerError", str(e))
+
+    def _on_disconnected(self) -> None:
+        """Handle disconnection"""
+        try:
+            self._change_broadcast_state(BroadcastState.DISCONNECTED)
+            self.logger.info("Disconnected from broadcast server")
+
+            # # Send notification if not in headless mode
+            # if not self.headless_mode and hasattr(self.main_window, "sendNotificationMessage"):
+            #     self.main_window.sendNotificationMessage(
+            #         "Live Broadcast",
+            #         "Disconnected from broadcast server",
+            #         NotificationType.ARTISAN_SYSTEM,
+            #     )
+
+        except Exception as e:
+            self._record_error("DisconnectionHandlerError", str(e))
+
+    def _change_broadcast_state(self, new_state: BroadcastState) -> None:
+        """Change broadcast state and emit signal"""
+        try:
+            old_state = self.broadcast_state
+            self.broadcast_state = new_state
+            self.logger.info(f"Broadcast state changed: {old_state.value} -> {new_state.value}")
+            self.signals.broadcast_state_changed.emit(new_state.value)
+        except Exception as e:
+            self._record_error("BroadcastStateChangeError", str(e))
+
     def _configure(self) -> None:
-        """Open configuration dialog"""
+        """Show configuration dialog with headless mode support"""
+        if self.headless_mode:
+            self.logger.warning("Configuration dialog not available in headless mode")
+            return
+
         try:
             from .config_dialog import LiveBroadcastConfigDialog
+
             dialog = LiveBroadcastConfigDialog(self.main_window, self.config)
-            if dialog.exec():
-                # Save configuration
+            if dialog.exec() == QDialog.DialogCode.Accepted:
                 self.config.save_config()
-                
-                # Restart broadcaster if it's running
-                if self.broadcaster and self.broadcaster.is_connected():
-                    self._stop_broadcaster()
-                    self._start_broadcaster()
-                    
+                self.logger.info("Configuration updated and saved")
         except Exception as e:
-            self.logger.error(f"Error opening config dialog: {e}")
-            QMessageBox.warning(self.main_window, "Configuration Error", 
-                              f"Error opening configuration dialog: {e}")
-    
-    def _update_status(self, status: str) -> None:
-        """Update the status display"""
-        if hasattr(self, 'status_action'):
-            self.status_action.setText(f"Status: {status}")
-        self.logger.info(f"Broadcaster status: {status}")
+            self._record_error("ConfigurationError", str(e))
 
-        if hasattr(self.main_window, 'notifications'): #TODO: redo this
-            title = "Live Broadcast"
-            message = None
-            
-            if status.lower() == 'connected':
-                message = "Successfully connected to the broadcast server."
-            elif status.lower() == 'disconnected':
-                message = "Disconnected from the broadcast server."
-
-            if message:
-                self.main_window.notifications.sendNotificationMessage(
-                    title,
-                    message,
-                    NotificationType.ARTISAN_SYSTEM
-                )
-    
-    def _test_event_broadcast(self) -> None:
-        """Test event broadcasting"""
-        self.logger.info("Testing event broadcast...")
-        self._broadcast_event("charge")
-    
-    def _test_data_broadcast(self) -> None:
-        """Test data broadcasting"""
-        self.logger.info("Testing data broadcast...")
-        test_data = {
-            'type': 'roast_data',
-            'timestamp': time.time(),
-            'roast_time': 0,
-            'time_since_charge': 0,
-            'current_temperatures': {
-                'et': 25.0,
-                'bt': 25.0
-            },
-            'rate_of_rise': {
-                'et': 0.0,
-                'bt': 0.0
-            },
-            'events': {},
-            'custom_events': [],
-            'roast_state': {
-                'is_roasting': False,
-                'is_monitoring': False
-            }
-        }
-        self._broadcast_roast_data(test_data)
-    
     def _show_status(self) -> None:
-        """Show current status"""
-        status_info = []
-        status_info.append(f"Plugin: {self.name} v{self.version}")
-        status_info.append(f"WebSockets available: {WEBSOCKETS_AVAILABLE}")
-        
-        if self.broadcaster:
-            status_info.append(f"Broadcaster connected: {self.broadcaster.is_connected()}")
-            status_info.append(f"Server: {self.config.server_host}:{self.config.server_port}{self.config.server_path}")
-        else:
-            status_info.append("Broadcaster: None")
-        
-        if self.main_window and hasattr(self.main_window, 'qmc'):
-            qmc = self.main_window.qmc
-            status_info.append(f"Roast active: {qmc.flagstart}")
-            status_info.append(f"Monitor active: {qmc.flagon}")
-            status_info.append(f"Event states: {self.last_event_states}")
-        
-        status_text = "\n".join(status_info)
-        self.logger.info(f"Status:\n{status_text}")
-        QMessageBox.information(self.main_window, "Live Broadcast Status", status_text)
-
-    def _show_incoming_message(self, data):
-        msg = json.dumps(data, indent=2)
-        def show_msgbox():
-            from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.information(self.main_window, "Incoming WebSocket Message", msg)
-        QTimer.singleShot(0, show_msgbox)
-
-
-    def _on_ws_message(self, data):
-        self.logger.info(f"LiveBroadcastPlugin received: {data}")
-
-        if hasattr(self.main_window, "addserial"):
-            self.main_window.addserial(f"LiveBroadcastPlugin received: {data}")
-
-        if hasattr(self.main_window, "addmessage"):
-            self.main_window.addmessage(f"LiveBroadcastPlugin received: {data}")
-
-
-        msg_type = data.get("type")
-
-        # Handle roast control messages
-        if msg_type == "roast_control":
-            command = data.get("command")
-            if command == "toggle_monitoring":
-                self.logger.info("Received command to toggle monitoring state (ON/OFF).")
-                self.signals.toggle_monitoring_signal.emit(False)
-            elif command == "toggle_roasting":
-                self.logger.info("Received command to toggle roasting state (START/DROP).")
-                self.signals.toggle_roasting_signal.emit(False)
-            elif command == "reset": 
-                self.logger.info("Received command to reset roast.")
-                self.signals.reset_roast_signal.emit()
-            else:
-                self.logger.warning(f"Unknown roast_control command: {command}")
-
-        # Handle roast_event messages
-        if data.get("type") == "roast_event":
-            event_name = data.get("event")
-            if event_name:
-                self.logger.info(f"Marking event on canvas from roast_event: {event_name}")
-                # self._mark_event_on_canvas(event_name, noaction=True)
-                self.signals.mark_event_signal.emit(event_name, True)
-        
-
-        
-        # Handle custom_event messages 
-        if data.get("type") == "custom_event":
-            event_data = data.get("data", {})
-            description = event_data.get("description", "").lower()
-            
-
-            event_to_mark = None
-            if "charge" in description:
-                event_to_mark = "charge"
-            elif "dry" in description:
-                event_to_mark = "dry_end"
-            elif "fc start" in description:
-                event_to_mark = "fc_start"
-            elif "fc end" in description:
-                event_to_mark = "fc_end"
-            elif "sc start" in description:
-                event_to_mark = "sc_start"
-            elif "sc end" in description:
-                event_to_mark = "sc_end"
-            elif "drop" in description:
-                event_to_mark = "drop"
-            elif "cool" in description:
-                event_to_mark = "cool_end"
-
-            if event_to_mark:
-                self.signals.mark_event_signal.emit(event_to_mark, True)
-
-        
-        # Handle pushMessage messages (wsport.py format)
-        push_message = data.get("pushMessage")
-            
-
-        if push_message == "addEvent":
-            event_data = data.get("data", {})
-            event_name = event_data.get("event")
-
-            event_to_mark = None
-            if event_name == "firstCrackBeginningEvent":
-                event_to_mark = "fc_start"
-            elif event_name == "firstCrackEndEvent":
-                event_to_mark = "fc_end"
-            elif event_name == "secondCrackBeginningEvent":
-                event_to_mark = "sc_start"
-            elif event_name == "secondCrackEndEvent":
-                event_to_mark = "sc_end"
-            elif event_name == "colorChangeEvent":
-                event_to_mark = "dry_end"
-            
-            if event_to_mark:
-                self.signals.mark_event_signal.emit(event_to_mark, True)
-        
-        elif push_message == "startRoasting":
-            self.signals.mark_event_signal.emit("charge", True)
-        
-        elif push_message == "endRoasting":
-            self.signals.mark_event_signal.emit("drop", True)
-
-    def _mark_event_on_canvas(self, event_name, noaction=False):
-        qmc = getattr(self.main_window, "qmc", None)
-        if not qmc:
-            self.logger.error("Canvas (qmc) not found!")
+        """Show status with headless mode support"""
+        if self.headless_mode:
+            self.logger.info(f"Broadcast status: {self.broadcast_state.value}")
             return
 
-        if event_name == "charge" and hasattr(qmc, "markCharge"):
-            qmc.markCharge(noaction)
-        elif event_name == "dry_end" and hasattr(qmc, "markDryEnd"):
-            qmc.markDryEnd(noaction) 
-        elif event_name == "fc_start" and hasattr(qmc, "mark1Cstart"):
-            qmc.mark1Cstart(noaction)
-        elif event_name == "fc_end" and hasattr(qmc, "mark1Cend"):
-            qmc.mark1Cend(noaction)
-        elif event_name == "sc_start" and hasattr(qmc, "mark2Cstart"):
-            qmc.mark2Cstart(noaction)
-        elif event_name == "sc_end" and hasattr(qmc, "mark2Cend"):
-            qmc.mark2Cend(noaction)
-        elif event_name == "drop" and hasattr(qmc, "markDrop"):
-            qmc.markDrop(noaction)
-        elif event_name == 'cool_end' and hasattr(qmc, 'markCoolEnd'): 
-            qmc.markCoolEnd(noaction)
+        try:
+            status_text = f"Broadcast Status: {self.broadcast_state.value}\n"
+            status_text += f"Messages Sent: {self.metrics.messages_sent}\n"
+            status_text += f"Messages Failed: {self.metrics.messages_failed}\n"
+            status_text += f"Connection Attempts: {self.metrics.connection_attempts}\n"
+            status_text += f"Successful Connections: {self.metrics.successful_connections}\n"
+            status_text += f"Failed Connections: {self.metrics.failed_connections}"
+
+            QMessageBox.information(self.main_window, "Broadcast Status", status_text)
+        except Exception as e:
+            self._record_error("StatusDisplayError", str(e))
+
+    def _test_event_broadcast(self) -> None:
+        """Test event broadcast"""
+        try:
+            test_event = {
+                "type": "test_event",
+                "event": "test",
+                "data": {
+                    "time": time.time(),
+                    "temperature": 100.0,
+                    "message": "Test event from Live Broadcast Plugin",
+                },
+            }
+
+            self._broadcast_roast_data(test_event)
+            self.logger.info("Test event broadcast sent")
+
+        except Exception as e:
+            self._record_error("TestEventError", str(e))
+
+    def _test_data_broadcast(self) -> None:
+        """Test data broadcast"""
+        try:
+            test_data = {
+                "type": "test_data",
+                "timestamp": time.time(),
+                "current_temperatures": {"et": 200.0, "bt": 180.0},
+                "rate_of_rise": {"et": 5.0, "bt": 4.0},
+                "roast_time": 300.0,
+                "message": "Test data from Live Broadcast Plugin",
+            }
+
+            self._broadcast_roast_data(test_data)
+            self.logger.info("Test data broadcast sent")
+
+        except Exception as e:
+            self._record_error("TestDataError", str(e))
+
+    def _show_incoming_message(self, data):
+        """Handle incoming messages with headless mode support"""
+        if self.headless_mode:
+            self.logger.info(f"Incoming message: {data}")
         else:
-            self.logger.warning(f"Unknown or unmapped event: {event_name}")
+            try:
+
+                def show_msgbox():
+                    QMessageBox.information(self.main_window, "Incoming Message", str(data))
+
+                QTimer.singleShot(0, show_msgbox)
+            except Exception as e:
+                self._record_error("IncomingMessageError", str(e))
+
+    def _on_ws_message(self, data):
+        """Handle WebSocket messages with comprehensive error handling"""
+        try:
+            self.metrics.last_receive_time = datetime.now()
+
+            if isinstance(data, str):
+                try:
+                    data = json.loads(data)
+                except json.JSONDecodeError as e:
+                    self._record_error("JSONDecodeError", str(e), {"raw_data": data})
+                    return
+
+            if not isinstance(data, dict):
+                self._record_error("InvalidMessageType", f"Expected dict, got {type(data)}")
+                return
+
+            msg_type = data.get("type")
+            if not msg_type:
+                self._record_error("MissingMessageType", "Message missing 'type' field")
+                return
+
+            self.logger.debug(f"Received message type: {msg_type}")
+
+            # Handle different message types
+            if msg_type == "roast_control":
+                self._handle_roast_control(data)
+            elif msg_type == "test":
+                self._handle_test_message(data)
+            elif msg_type == "ping":
+                self._handle_ping(data)
+            elif msg_type == "connection_established":
+                self._handle_connection_established(data)
+            elif msg_type == "pong":
+                self._handle_pong(data)
+            elif msg_type == "error":
+                self._handle_server_error(data)
+            else:
+                self.logger.warning(f"Unknown message type: {msg_type}")
+
+        except Exception as e:
+            self._record_error("WebSocketMessageError", str(e), {"data": str(data)})
+
+    def _handle_roast_control(self, data: Dict[str, Any]) -> None:
+        """Handle roast control messages"""
+        try:
+            command = data.get("command")
+            if not command:
+                self._record_error(
+                    "MissingCommand", "Roast control message missing 'command' field"
+                )
+                return
+
+            self.logger.info(f"Received roast control command: {command}")
+
+            if command == "toggle_monitoring":
+                self.signals.toggle_monitoring_signal.emit(True)
+            elif command == "toggle_roasting":
+                self.signals.toggle_roasting_signal.emit(True)
+            elif command == "reset":
+                self.signals.reset_roast_signal.emit()
+            else:
+                self.logger.warning(f"Unknown roast control command: {command}")
+
+        except Exception as e:
+            self._record_error("RoastControlError", str(e), {"command": data.get("command")})
+
+    def _handle_test_message(self, data: Dict[str, Any]) -> None:
+        """Handle test messages"""
+        try:
+            message = data.get("message", "Test message received")
+            self.logger.info(f"Test message: {message}")
+
+            # Send test response
+            response = {
+                "type": "test_response",
+                "message": f"Test response from {self.name}",
+                "timestamp": time.time(),
+            }
+
+            self._broadcast_roast_data(response)
+
+        except Exception as e:
+            self._record_error("TestMessageError", str(e))
+
+    def _handle_ping(self, data: Dict[str, Any]) -> None:
+        """Handle ping messages"""
+        try:
+            # Send pong response
+            response = {"type": "pong", "timestamp": time.time()}
+
+            self._broadcast_roast_data(response)
+
+        except Exception as e:
+            self._record_error("PingError", str(e))
+
+    def _handle_connection_established(self, data: Dict[str, Any]) -> None:
+        """Handle connection established message from server"""
+        try:
+            message = data.get("message", "Connection established")
+            timestamp = data.get("timestamp")
+            current_state = data.get("currentState", {})
+
+            self.logger.info(f"Server connection established: {message}")
+
+            if timestamp:
+                self.logger.debug(f"Server timestamp: {timestamp}")
+
+            if current_state:
+                self.logger.debug(f"Server current state: {current_state}")
+
+        except Exception as e:
+            self._record_error("ConnectionEstablishedError", str(e))
+
+    def _handle_pong(self, data: Dict[str, Any]) -> None:
+        """Handle pong response from server"""
+        try:
+            timestamp = data.get("timestamp")
+            self.logger.debug(f"Received pong from server (timestamp: {timestamp})")
+        except Exception as e:
+            self._record_error("PongError", str(e))
+
+    def _handle_server_error(self, data: Dict[str, Any]) -> None:
+        """Handle error message from server"""
+        try:
+            error_message = data.get("message", "Unknown server error")
+            error_code = data.get("code")
+
+            self.logger.warning(f"Server error: {error_message}")
+            if error_code:
+                self.logger.warning(f"Server error code: {error_code}")
+
+        except Exception as e:
+            self._record_error("ServerErrorHandlerError", str(e))
+
+    def _mark_event_on_canvas(self, event_name: str, noaction: bool = False) -> None:
+        """Mark event on canvas"""
+        try:
+            if noaction:
+                return
+
+            if not hasattr(self.main_window, "qmc"):
+                return
+
+            qmc = self.main_window.qmc
+
+            # Map event names to qmc methods
+            event_methods = {
+                "charge": "markCharge",
+                "dry_end": "markDRY",
+                "fc_start": "markFCs",
+                "fc_end": "markFCe",
+                "sc_start": "markSCs",
+                "sc_end": "markSCe",
+                "drop": "markDrop",
+                "cool_end": "markCool",
+            }
+
+            if event_name in event_methods:
+                method_name = event_methods[event_name]
+                if hasattr(qmc, method_name):
+                    method = getattr(qmc, method_name)
+                    method()
+                    self.logger.info(f"Marked event on canvas: {event_name}")
+                else:
+                    self.logger.warning(f"Method {method_name} not found on qmc")
+            else:
+                self.logger.warning(f"Unknown event name: {event_name}")
+
+        except Exception as e:
+            self._record_error("MarkEventError", str(e), {"event_name": event_name})
 
     def _on_device_update(self) -> None:
-        """Handle device updates (including sensor readings)"""
-        _log.info("Device update received")
-        if WEBSOCKETS_AVAILABLE:
-            self._broadcast_monitoring_data()
-    
+        """Handle device updates"""
+        try:
+            self.logger.debug("Device update received")
+            # Could broadcast device status here if needed
+        except Exception as e:
+            self._record_error("DeviceUpdateError", str(e))
+
     def _on_sensor_update(self) -> None:
         """Handle sensor updates"""
-        _log.info("Sensor update received")
-        if WEBSOCKETS_AVAILABLE:
-            self._broadcast_monitoring_data()
+        try:
+            self.logger.debug("Sensor update received")
+            # Could broadcast sensor status here if needed
+        except Exception as e:
+            self._record_error("SensorUpdateError", str(e))
 
-    def cleanup(self) -> None:
-        """Cleanup when plugin is disabled/unloaded"""
-        if self.broadcaster:
-            self.broadcaster.stop()
-        
-        if self.update_timer:
-            self.update_timer.stop()
+    def _health_check(self) -> None:
+        """Periodic health check"""
+        try:
+            # Check connection health
+            if self.broadcaster and self.broadcaster.is_running and self.metrics.last_send_time:
 
-        if hasattr(self, 'monitoring_timer'):
-            self.monitoring_timer.stop()
-        
-        super().cleanup()
+                time_since_last_send = (
+                    datetime.now() - self.metrics.last_send_time
+                ).total_seconds()
+                if time_since_last_send > 60:  # No data sent for 1 minute
+                    self.logger.warning(f"No data sent for {time_since_last_send:.1f} seconds")
+
+            # Check consecutive failures
+            if self.consecutive_failures >= self.max_consecutive_failures:
+                self.logger.error(
+                    f"Too many consecutive failures ({self.consecutive_failures}), attempting recovery"
+                )
+                self._attempt_recovery()
+
+            # Log health status periodically
+            if self.has_errors:
+                self.logger.info(f"Plugin health: {self.get_health_status()}")
+
+        except Exception as e:
+            self._record_error("HealthCheckError", str(e))
+
+    def _attempt_recovery(self) -> None:
+        """Attempt to recover from errors"""
+        try:
+            self.logger.info("Attempting error recovery...")
+
+            # Reset consecutive failures
+            self.consecutive_failures = 0
+
+            # Restart broadcaster if needed
+            if self.broadcast_state == BroadcastState.ERROR:
+                self._stop_broadcaster()
+                time.sleep(2)  # Wait before restarting
+                self._start_broadcaster()
+
+            # Reset error state
+            self.reset_errors()
+
+            self.logger.info("Recovery attempt completed")
+
+        except Exception as e:
+            self._record_error("RecoveryError", str(e))
+
+    def _cleanup_plugin(self) -> None:
+        """Cleanup the plugin with comprehensive error handling"""
+        try:
+            self.logger.info(f"Cleaning up {self.name}")
+
+            # Stop timers
+            if self.update_timer:
+                self.update_timer.stop()
+                self.update_timer.deleteLater()
+                self.update_timer = None
+
+            if self.monitoring_timer:
+                self.monitoring_timer.stop()
+                self.monitoring_timer.deleteLater()
+                self.monitoring_timer = None
+
+            if self.health_check_timer:
+                self.health_check_timer.stop()
+                self.health_check_timer.deleteLater()
+                self.health_check_timer = None
+
+            # Stop broadcaster
+            if self.broadcaster:
+                self.broadcaster.stop()
+                self.broadcaster = None
+
+            # Disconnect signals
+            if hasattr(self, "signals"):
+                try:
+                    self.signals.mark_event_signal.disconnect()
+                    self.signals.toggle_monitoring_signal.disconnect()
+                    self.signals.toggle_roasting_signal.disconnect()
+                    self.signals.reset_roast_signal.disconnect()
+                except Exception as e:
+                    self.logger.warning(f"Error disconnecting signals: {e}")
+
+            # Update final metrics
+            if self.metrics.start_time:
+                self.metrics.total_uptime += (
+                    datetime.now() - self.metrics.start_time
+                ).total_seconds()
+
+            self.logger.info(f"Cleanup completed for {self.name}")
+
+        except Exception as e:
+            self._record_error("CleanupError", str(e))
+
+    def get_plugin_status(self) -> Dict[str, Any]:
+        """Get comprehensive plugin status"""
+        try:
+            base_status = super().get_health_status()
+
+            # Add broadcast-specific status
+            broadcast_status = {
+                "broadcast_state": self.broadcast_state.value,
+                "headless_mode": self.headless_mode,
+                "websockets_available": WEBSOCKETS_AVAILABLE,
+                "broadcaster_running": self.broadcaster.is_running if self.broadcaster else False,
+                "metrics": {
+                    "messages_sent": self.metrics.messages_sent,
+                    "messages_failed": self.metrics.messages_failed,
+                    "bytes_sent": self.metrics.bytes_sent,
+                    "connection_attempts": self.metrics.connection_attempts,
+                    "successful_connections": self.metrics.successful_connections,
+                    "failed_connections": self.metrics.failed_connections,
+                    "total_uptime": self.metrics.total_uptime,
+                    "last_send_time": (
+                        self.metrics.last_send_time.isoformat()
+                        if self.metrics.last_send_time
+                        else None
+                    ),
+                    "last_receive_time": (
+                        self.metrics.last_receive_time.isoformat()
+                        if self.metrics.last_receive_time
+                        else None
+                    ),
+                },
+                "consecutive_failures": self.consecutive_failures,
+                "config": {
+                    "server_host": self.config.server_host,
+                    "server_port": self.config.server_port,
+                    "auto_start": self.config.auto_start,
+                    "broadcast_interval": self.config.broadcast_interval,
+                },
+            }
+
+            base_status.update(broadcast_status)
+            return base_status
+
+        except Exception as e:
+            self._record_error("StatusError", str(e))
+            return {"error": str(e)}
+
+
+ArtisanPlugin = LiveBroadcastPlugin
+
