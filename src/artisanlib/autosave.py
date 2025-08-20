@@ -17,6 +17,7 @@
 
 from typing import Optional, cast, TYPE_CHECKING
 from artisanlib.dialogs import ArtisanDialog
+import logging
 
 try:
     from PyQt6.QtCore import Qt, pyqtSlot, QSettings # @UnusedImport @Reimport  @UnresolvedImport
@@ -29,6 +30,25 @@ except ImportError:
         QComboBox, QHBoxLayout, QVBoxLayout, QCheckBox, QGridLayout, QLineEdit) # @UnusedImport @Reimport  @UnresolvedImport
     from PyQt5.QtGui import QStandardItemModel # type: ignore # @UnusedImport @Reimport  @UnresolvedImport
 
+
+_log = logging.getLogger(__name__)
+
+
+
+try:
+    from artisanlib.plugins.autosave.autosave_addons import (
+        create_server_upload_widgets, 
+        create_additional_format_widgets,
+        get_server_upload_values,
+        get_format_values,
+        apply_format_values,
+        apply_server_upload_values
+    )
+    AUTOSAVE_ADDONS_AVAILABLE = True
+    _log.info(f"Autosave addons imported successfully")
+except ImportError as e:
+    _log.info(f"Import failed: {e}")
+    AUTOSAVE_ADDONS_AVAILABLE = False
 
 if TYPE_CHECKING:
     from artisanlib.main import ApplicationWindow # noqa: F401 # pylint: disable=unused-import
@@ -76,40 +96,7 @@ class autosaveDlg(ArtisanDialog):
         self.imageTypesComboBox = QComboBox()
         self.imageTypesComboBox.addItems(self.aw.qmc.autoasaveimageformat_types)
 
-        # --- Second Save Also Option --- # Add support to handle saving more than 2 formats via autosave
-        autopdflabel2 = QLabel(QApplication.translate('CheckBox','Save also'))
-        self.autopdfcheckbox2 = QCheckBox()
-        self.autopdfcheckbox2.setToolTip(QApplication.translate('Tooltip', 'Save another image alongside .alog profiles'))
-        self.autopdfcheckbox2.setChecked(getattr(self.aw.qmc, 'autosaveimage2', False))
-        self.imageTypesComboBox2 = QComboBox()
-        self.imageTypesComboBox2.addItems(self.aw.qmc.autoasaveimageformat_types)
-        self.imageTypesComboBox2.setCurrentIndex(self.aw.qmc.autoasaveimageformat_types.index(getattr(self.aw.qmc, 'autosaveimageformat2', self.aw.qmc.autosaveimageformat)))
-        pathAlsoButton2 = QPushButton(QApplication.translate('Button','Path'))
-        pathAlsoButton2.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.pathAlsoEdit2 = QLineEdit(getattr(self.aw.qmc, 'autosavealsopath2', self.aw.qmc.autosavealsopath))
-        self.pathAlsoEdit2.setToolTip(QApplication.translate('Tooltip', 'Sets the directory to store the second save also files'))
-        pathAlsoButton2.clicked.connect(lambda: self.pathAlsoEdit2.setText(self.aw.ArtisanExistingDirectoryDialog(msg=QApplication.translate('Form Caption','AutoSave Save Also Path 2'))))
-
-        # --- Third Save Also Option --- # Add support to handle saving more than 2 formats via autosave
-        autopdflabel3 = QLabel(QApplication.translate('CheckBox','Save also'))
-        self.autopdfcheckbox3 = QCheckBox()
-        self.autopdfcheckbox3.setToolTip(QApplication.translate('Tooltip', 'Save a third image alongside .alog profiles'))
-        self.autopdfcheckbox3.setChecked(getattr(self.aw.qmc, 'autosaveimage3', False))
-        self.imageTypesComboBox3 = QComboBox()
-        self.imageTypesComboBox3.addItems(self.aw.qmc.autoasaveimageformat_types)
-        self.imageTypesComboBox3.setCurrentIndex(self.aw.qmc.autoasaveimageformat_types.index(getattr(self.aw.qmc, 'autosaveimageformat3', self.aw.qmc.autosaveimageformat)))
-        pathAlsoButton3 = QPushButton(QApplication.translate('Button','Path'))
-        pathAlsoButton3.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.pathAlsoEdit3 = QLineEdit(getattr(self.aw.qmc, 'autosavealsopath3', self.aw.qmc.autosavealsopath))
-        self.pathAlsoEdit3.setToolTip(QApplication.translate('Tooltip', 'Sets the directory to store the third save also files'))
-        pathAlsoButton3.clicked.connect(lambda: self.pathAlsoEdit3.setText(self.aw.ArtisanExistingDirectoryDialog(msg=QApplication.translate('Form Caption','AutoSave Save Also Path 3'))))
-
-        # Add support to upload to external server
-        self.uploadToServerCheckbox = QCheckBox(QApplication.translate('CheckBox','Upload to external server'))
-        self.uploadToServerCheckbox.setChecked(getattr(self.aw.qmc, 'autosave_upload_to_server', False))
-        self.serverUrlEdit = QLineEdit(getattr(self.aw.qmc, 'autosave_server_url', ''))
-        self.serverUrlEdit.setPlaceholderText("http://localhost:4000/upload")
-
+       
 
         try:
             if not self.aw.QtWebEngineSupport:
@@ -172,24 +159,52 @@ class autosaveDlg(ArtisanDialog):
         autolayout.addWidget(pathAlsoButton,6,0)
         autolayout.addWidget(self.pathAlsoEdit,6,1,1,2)
 
-        # Add support to handle saving more than 2 formats via autosave
-        autolayout.addWidget(self.autopdfcheckbox2,7,0,Qt.AlignmentFlag.AlignRight)
-        autolayout.addWidget(autopdflabel2,7,1)
-        autolayout.addWidget(self.imageTypesComboBox2,7,2)
-        autolayout.addWidget(pathAlsoButton2,8,0)
-        autolayout.addWidget(self.pathAlsoEdit2,8,1,1,2)
 
-        # Add support to handle saving more than 2 formats via autosave
-        autolayout.addWidget(self.autopdfcheckbox3,9,0,Qt.AlignmentFlag.AlignRight)
-        autolayout.addWidget(autopdflabel3,9,1)
-        autolayout.addWidget(self.imageTypesComboBox3,9,2)
-        autolayout.addWidget(pathAlsoButton3,10,0)
-        autolayout.addWidget(self.pathAlsoEdit3,10,1,1,2)
-
-
-        # Add support to upload to external server
-        autolayout.addWidget(self.uploadToServerCheckbox, 11, 0, Qt.AlignmentFlag.AlignRight)
-        autolayout.addWidget(self.serverUrlEdit, 11, 1, 1, 2)
+        if AUTOSAVE_ADDONS_AVAILABLE:
+            # Create format 2 widgets
+            self.autopdfcheckbox2, autopdflabel2, self.imageTypesComboBox2, pathAlsoButton2, self.pathAlsoEdit2 = create_additional_format_widgets(self.aw, 2)
+            
+            # Create format 3 widgets  
+            self.autopdfcheckbox3, autopdflabel3, self.imageTypesComboBox3, pathAlsoButton3, self.pathAlsoEdit3 = create_additional_format_widgets(self.aw, 3)
+            
+            # Create server upload widgets
+            self.uploadGroupBox = create_server_upload_widgets(self.aw)
+            
+            # Extract individual widgets from the group box 
+            self.uploadToServerCheckbox = self.uploadGroupBox.uploadToServerCheckbox
+            self.serverUrlEdit = self.uploadGroupBox.serverUrlEdit
+            
+            # Connect the path buttons to their methods
+            pathAlsoButton2.clicked.connect(lambda: self.pathAlsoEdit2.setText(self.aw.ArtisanExistingDirectoryDialog(msg=QApplication.translate('Form Caption','AutoSave Save Also Path 2'))))
+            pathAlsoButton3.clicked.connect(lambda: self.pathAlsoEdit3.setText(self.aw.ArtisanExistingDirectoryDialog(msg=QApplication.translate('Form Caption','AutoSave Save Also Path 3'))))
+            
+            # Add format 2 to layout
+            autolayout.addWidget(self.autopdfcheckbox2, 7, 0, Qt.AlignmentFlag.AlignRight)
+            autolayout.addWidget(autopdflabel2, 7, 1)
+            autolayout.addWidget(self.imageTypesComboBox2, 7, 2)
+            autolayout.addWidget(pathAlsoButton2, 8, 0)
+            autolayout.addWidget(self.pathAlsoEdit2, 8, 1, 1, 2)
+            
+            # Add format 3 to layout
+            autolayout.addWidget(self.autopdfcheckbox3, 9, 0, Qt.AlignmentFlag.AlignRight)
+            autolayout.addWidget(autopdflabel3, 9, 1)
+            autolayout.addWidget(self.imageTypesComboBox3, 9, 2)
+            autolayout.addWidget(pathAlsoButton3, 10, 0)
+            autolayout.addWidget(self.pathAlsoEdit3, 10, 1, 1, 2)
+            
+            # Add server upload group box to layout
+            autolayout.addWidget(self.uploadGroupBox, 11, 0, 1, 3) 
+        else:
+            # Fallback - disable addon features
+            self.autopdfcheckbox2 = None
+            self.imageTypesComboBox2 = None
+            self.pathAlsoEdit2 = None
+            self.autopdfcheckbox3 = None
+            self.imageTypesComboBox3 = None
+            self.pathAlsoEdit3 = None
+            self.uploadToServerCheckbox = None
+            self.serverUrlEdit = None
+            self.uploadGroupBox = None
 
 
         autolayout.setColumnStretch(0,0)
@@ -258,19 +273,18 @@ class autosaveDlg(ArtisanDialog):
         self.aw.qmc.autosaveimageformat = self.imageTypesComboBox.currentText()
         self.aw.qmc.autosaveaddtorecentfilesflag = self.addtorecentfiles.isChecked()
 
-        # For the second extra format  # Add support to handle saving more than 2 formats via autosave 
-        self.aw.qmc.autosaveimage2 = self.autopdfcheckbox2.isChecked()
-        self.aw.qmc.autosaveimageformat2 = self.imageTypesComboBox2.currentText()
-        self.aw.qmc.autosavealsopath2 = self.pathAlsoEdit2.text()
-
-        # For the third extra format # Add support to handle saving more than 2 formats via autosave 
-        self.aw.qmc.autosaveimage3 = self.autopdfcheckbox3.isChecked()
-        self.aw.qmc.autosaveimageformat3 = self.imageTypesComboBox3.currentText()
-        self.aw.qmc.autosavealsopath3 = self.pathAlsoEdit3.text()
-
-        # Add support to upload to external server
-        self.aw.qmc.autosave_upload_to_server = self.uploadToServerCheckbox.isChecked()
-        self.aw.qmc.autosave_server_url = self.serverUrlEdit.text()
+        if AUTOSAVE_ADDONS_AVAILABLE:
+            # Save widget values to config
+            from artisanlib.plugins.autosave.autosave_addons import save_widget_values_to_config
+            
+            save_widget_values_to_config(
+                self.uploadGroupBox,  # Pass the group box instead of individual widgets
+                self.autopdfcheckbox2, self.imageTypesComboBox2, self.pathAlsoEdit2,
+                self.autopdfcheckbox3, self.imageTypesComboBox3, self.pathAlsoEdit3
+            )
+            
+            from artisanlib.plugins.autosave.autosave_addons import load_config_to_qmc
+            load_config_to_qmc(self.aw)
 
 
         self.close()

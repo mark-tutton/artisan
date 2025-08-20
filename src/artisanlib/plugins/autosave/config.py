@@ -1,0 +1,108 @@
+import json
+import logging
+import os
+from pathlib import Path
+from typing import Dict, Any, Optional
+from dataclasses import dataclass, field
+
+_log = logging.getLogger(__name__)
+
+@dataclass
+class AutosaveAddonConfig:
+    """Configuration for autosave addons"""
+    
+    # Format 2 settings
+    autosave_pdf_2: bool = False
+    autosave_image_type_2: str = "PDF"
+    autosave_path_2: str = ""
+    
+    # Format 3 settings
+    autosave_pdf_3: bool = False
+    autosave_image_type_3: str = "PDF"
+    autosave_path_3: str = ""
+    
+    # Server upload settings
+    autosave_upload_to_server: bool = False
+    autosave_server_url: str = "http://localhost:4000/upload"
+    autosave_api_token: str = ""
+    autosave_jwt_token: str = ""
+    autosave_auth_type: str = "none"  # "none", "api_token", "jwt", "bearer"
+    
+    # Server connection settings
+    autosave_connection_timeout: int = 30  # seconds
+    autosave_retry_attempts: int = 3
+    autosave_retry_delay: int = 5  # seconds
+    autosave_health_check_enabled: bool = True
+    autosave_health_check_interval: int = 300  # seconds (5 minutes)
+    
+    # more settings
+    enabled: bool = True
+    auto_save_on_roast_end: bool = True
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert config to dictionary"""
+        return {
+            "autosave_pdf_2": self.autosave_pdf_2,
+            "autosave_image_type_2": self.autosave_image_type_2,
+            "autosave_path_2": self.autosave_path_2,
+            "autosave_pdf_3": self.autosave_pdf_3,
+            "autosave_image_type_3": self.autosave_image_type_3,
+            "autosave_path_3": self.autosave_path_3,
+            "autosave_upload_to_server": self.autosave_upload_to_server,
+            "autosave_server_url": self.autosave_server_url,
+            "autosave_api_token": self.autosave_api_token,
+            "autosave_jwt_token": self.autosave_jwt_token,
+            "autosave_auth_type": self.autosave_auth_type,
+            "autosave_connection_timeout": self.autosave_connection_timeout,
+            "autosave_retry_attempts": self.autosave_retry_attempts,
+            "autosave_retry_delay": self.autosave_retry_delay,
+            "autosave_health_check_enabled": self.autosave_health_check_enabled,
+            "autosave_health_check_interval": self.autosave_health_check_interval,
+            "enabled": self.enabled,
+            "auto_save_on_roast_end": self.auto_save_on_roast_end
+        }
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'AutosaveAddonConfig':
+        """Create config from dictionary"""
+        return cls(**data)
+    
+    @classmethod
+    def load_from_file(cls, config_path: Optional[str] = None) -> 'AutosaveAddonConfig':
+        """Load config from file"""
+        if config_path is None:
+            # Default config path in user's home directory
+            config_dir = Path.home() / ".artisan" / "plugins" / "autosave"
+            config_dir.mkdir(parents=True, exist_ok=True)
+            config_path = config_dir / "config.json"
+        
+        try:
+            if config_path.exists():
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    _log.info(f"✅ Loaded autosave addon config from {config_path}")
+                    return cls.from_dict(data)
+            else:
+                _log.info(f"📁 No config file found at {config_path}, using defaults")
+                return cls()
+        except Exception as e:
+            _log.error(f"❌ Failed to load config from {config_path}: {e}")
+            return cls()
+    
+    def save_to_file(self, config_path: Optional[str] = None) -> bool:
+        """Save config to file"""
+        try:
+            if config_path is None:
+                # Default config path in user's home directory
+                config_dir = Path.home() / ".artisan" / "plugins" / "autosave"
+                config_dir.mkdir(parents=True, exist_ok=True)
+                config_path = config_dir / "config.json"
+            
+            with open(config_path, 'w', encoding='utf-8') as f:
+                json.dump(self.to_dict(), f, indent=2, ensure_ascii=False)
+            
+            _log.info(f"✅ Saved autosave addon config to {config_path}")
+            return True
+        except Exception as e:
+            _log.error(f"❌ Failed to save config to {config_path}: {e}")
+            return False
