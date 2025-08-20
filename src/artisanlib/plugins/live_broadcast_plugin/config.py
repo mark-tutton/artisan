@@ -13,8 +13,8 @@ _log = logging.getLogger(__name__)
 class LiveBroadcastConfig:
     # Server settings
     server_host: str = "localhost"
-    server_port: int = 3001
-    server_path: str = "/ws/roast"
+    server_port: int = 5001
+    server_path: str = "/socket.io/"
 
     # Connection settings
     reconnect_interval: float = 15.0
@@ -59,6 +59,19 @@ class LiveBroadcastConfig:
     # Logging settings
     enable_debug_logging: bool = False
     log_messages: bool = False
+
+    # Socket.IO settings
+    use_ssl: bool = False
+    auth_token: str = ""   
+    socketio_path: str = "/socket.io/"  # Socket.IO default path
+     
+    # Connection refresh settings
+    connection_refresh_interval: float = 3600.0  # 1 hour refresh
+    
+    # Security
+    enforce_secure_connection: bool = True  # Force WSS in production
+    validate_ssl_cert: bool = True
+    
 
     def __post_init__(self):
         """Initialize configuration with validation"""

@@ -34,7 +34,7 @@ class PluginError:
     context: Dict[str, Any] = field(default_factory=dict)
 
 class PluginBase(QObject):
-    """Enhanced base class for plugins with comprehensive error handling"""
+    """Base class for plugins with error handling"""
     
     # Signals for plugin state changes
     state_changed = pyqtSignal(str, str)  # plugin_name, new_state
@@ -56,7 +56,7 @@ class PluginBase(QObject):
         self.operation_times: Dict[str, List[float]] = {}
         
     def _setup_logging(self) -> None:
-        """Setup enhanced logging for the plugin"""
+        """Setup logging for the plugin"""
         # formatter with plugin context
         formatter = logging.Formatter(
             '%(asctime)s - %(name)s - %(levelname)s - %(message)s'

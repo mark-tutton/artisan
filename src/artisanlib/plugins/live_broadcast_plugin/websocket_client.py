@@ -8,12 +8,12 @@ from threading import Thread, Lock
 from contextlib import asynccontextmanager
 
 try:
-    import websockets
+    import socketio
 
-    WEBSOCKETS_AVAILABLE = True
+    SOCKETIO_AVAILABLE = True
 except ImportError:
-    websockets = None
-    WEBSOCKETS_AVAILABLE = False
+    socketio = None
+    SOCKETIO_AVAILABLE = False
 
 # PyQt imports
 try:
@@ -24,24 +24,29 @@ except ImportError:
 _log = logging.getLogger(__name__)
 
 
-class WebSocketBroadcaster(QObject):
-    """Production-ready WebSocket client for broadcasting roast data"""
+class SocketIOBroadcaster(QObject):
+    """Socket.IO client for broadcasting roast data"""
 
     # PyQt signals
     connected = pyqtSignal()
     disconnected = pyqtSignal()
     error = pyqtSignal(str)
     message_received = pyqtSignal(dict)
+    reconnecting = pyqtSignal()
+    reconnected = pyqtSignal()
 
     def __init__(
         self,
         host: str = "localhost",
         port: int = 3000,
-        path: str = "/ws/roast",
+        path: str = "/socket.io/",
+        secure: bool = False,
+        auth_token: Optional[str] = None,
         reconnect_interval: float = 5.0,
         max_reconnect_attempts: int = 10,
         connection_timeout: float = 10.0,
         ping_interval: float = 30.0,
+        connection_refresh_interval: float = 3600.0,  # 1 hour refresh
     ):
         super().__init__()
 
@@ -50,36 +55,37 @@ class WebSocketBroadcaster(QObject):
             raise ValueError("Host must be a non-empty string")
         if not isinstance(port, int) or port < 1 or port > 65535:
             raise ValueError("Port must be an integer between 1 and 65535")
-        if not isinstance(path, str):
-            raise ValueError("Path must be a string")
-        if reconnect_interval < 0.1:
-            raise ValueError("Reconnect interval must be at least 0.1 seconds")
-        if max_reconnect_attempts < 0:
-            raise ValueError("Max reconnect attempts must be non-negative")
 
         self.host = host.strip()
         self.port = port
+        self.secure = secure
         self.path = path if path.startswith("/") else f"/{path}"
-        self.url = f"ws://{self.host}:{self.port}{self.path}"
+        self.auth_token = auth_token
+
+        # Build URL with proper protocol
+        protocol = "wss" if secure else "ws"
+        self.url = f"{protocol}://{self.host}:{self.port}{self.path}"
 
         # Connection settings
         self.reconnect_interval = reconnect_interval
         self.max_reconnect_attempts = max_reconnect_attempts
         self.connection_timeout = connection_timeout
         self.ping_interval = ping_interval
+        self.connection_refresh_interval = connection_refresh_interval
         self.reconnect_attempts = 0
 
         # Connection state
-        self.websocket: Optional["websockets.WebSocketClientProtocol"] = None
+        self.sio: Optional[socketio.AsyncClient] = None
         self._is_connected = False
         self.is_running = False
         self._connection_start_time: Optional[float] = None
+        self._last_connection_refresh = 0
 
         # Threading and async
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[Thread] = None
         self._shutdown_event: Optional[asyncio.Event] = None
-        self._ping_task: Optional[asyncio.Task] = None
+        self._refresh_timer: Optional[asyncio.Task] = None
 
         # Thread safety
         self._lock = Lock()
@@ -93,18 +99,20 @@ class WebSocketBroadcaster(QObject):
         # Thread-safe signal emission
         self._signal_timer = QTimer()
         self._signal_timer.timeout.connect(self._emit_pending_signals)
-        self._signal_timer.start(50)  # Check every 50ms for better responsiveness
+        self._signal_timer.start(50)  # Check every 50ms
 
-        # Statistics
+        # Statistics and monitoring
         self._stats = {
             "messages_sent": 0,
             "messages_received": 0,
             "connection_attempts": 0,
+            "reconnection_attempts": 0,
             "last_connection_time": None,
             "total_uptime": 0.0,
+            "connection_refreshes": 0,
         }
 
-        _log.debug(f"WebSocketBroadcaster initialized for {self.url}")
+        _log.debug(f"SocketIOBroadcaster initialized for {self.url}")
 
     def add_connection_handler(self, handler: Callable[[], None]) -> None:
         """Add handler for connection events"""
@@ -132,32 +140,14 @@ class WebSocketBroadcaster(QObject):
                 stats["current_uptime"] = time.time() - self._connection_start_time
             return stats
 
-    @staticmethod
-    def start_background_loop(loop: asyncio.AbstractEventLoop) -> None:
-        """Clean event loop management like weblcds"""
-        asyncio.set_event_loop(loop)
-        try:
-            # run_forever() returns after calling loop.stop()
-            loop.run_forever()
-            # clean up tasks
-            for task in asyncio.all_tasks(loop):
-                task.cancel()
-            for t in [t for t in asyncio.all_tasks(loop) if not (t.done() or t.cancelled())]:
-                with suppress(asyncio.CancelledError):
-                    loop.run_until_complete(t)
-        except Exception as e:
-            _log.exception(e)
-        finally:
-            loop.close()
-
     def start(self) -> bool:
-        """Start the WebSocket client"""
+        """Start the Socket.IO client"""
         if self.is_running:
-            _log.warning("WebSocket broadcaster is already running")
+            _log.warning("Socket.IO broadcaster is already running")
             return True
 
-        if not WEBSOCKETS_AVAILABLE:
-            _log.error("websockets library is required for live broadcasting")
+        if not SOCKETIO_AVAILABLE:
+            _log.error("python-socketio library is required for live broadcasting")
             return False
 
         try:
@@ -166,25 +156,25 @@ class WebSocketBroadcaster(QObject):
                 self.reconnect_attempts = 0
                 self._stats["connection_attempts"] += 1
 
-            self._thread = Thread(target=self._run_loop, daemon=True, name="WebSocketBroadcaster")
+            self._thread = Thread(target=self._run_loop, daemon=True, name="SocketIOBroadcaster")
             self._thread.start()
 
-            _log.info(f"Started WebSocket broadcaster to {self.url}")
+            _log.info(f"Started Socket.IO broadcaster to {self.url}")
             return True
 
         except Exception as e:
-            _log.error(f"Failed to start WebSocket broadcaster: {e}")
+            _log.error(f"Failed to start Socket.IO broadcaster: {e}")
             with self._lock:
                 self.is_running = False
             return False
 
     def stop(self) -> bool:
-        """Stop the WebSocket client gracefully"""
+        """Stop the Socket.IO client gracefully"""
         if not self.is_running:
             return True
 
         try:
-            _log.info("Requesting WebSocket broadcaster to stop...")
+            _log.info("Requesting Socket.IO broadcaster to stop...")
 
             with self._lock:
                 self.is_running = False
@@ -200,23 +190,64 @@ class WebSocketBroadcaster(QObject):
             if self._thread and self._thread.is_alive():
                 self._thread.join(timeout=10)
                 if self._thread.is_alive():
-                    _log.warning("WebSocket thread did not stop within timeout")
+                    _log.warning("Socket.IO thread did not stop within timeout")
 
             # Clean up
             self._is_connected = False
-            self.websocket = None
+            self.sio = None
             self._connection_start_time = None
 
             # Update stats
             if self._connection_start_time:
                 self._stats["total_uptime"] += time.time() - self._connection_start_time
 
-            _log.info("Stopped WebSocket broadcaster")
+            _log.info("Stopped Socket.IO broadcaster")
             return True
 
         except Exception as e:
-            _log.error(f"Error stopping WebSocket broadcaster: {e}")
+            _log.error(f"Error stopping Socket.IO broadcaster: {e}")
             return False
+
+    async def _connect_and_run(self) -> None:
+        """Connect to Socket.IO server and handle messages"""
+        while self.is_running:
+            try:
+                # Create Socket.IO client with version-compatible configuration
+                client_kwargs = {
+                    "logger": True,
+                    "engineio_logger": True,
+                    "reconnection": True,
+                    "reconnection_attempts": self.max_reconnect_attempts,
+                    "reconnection_delay": self.reconnect_interval,
+                    "reconnection_delay_max": 30.0,
+                }
+
+                self.sio = socketio.AsyncClient(**client_kwargs)
+
+                # Setup event handlers
+                self._setup_socketio_handlers()
+
+                # Connect with authentication if token provided
+                connect_kwargs = {"wait_timeout": self.connection_timeout}
+
+                if self.auth_token:
+                    connect_kwargs["auth"] = {"token": self.auth_token}
+
+                await self.sio.connect(self.url, **connect_kwargs)
+
+                # Start connection refresh timer
+                self._refresh_timer = asyncio.create_task(self._connection_refresh_loop())
+
+                # Wait for shutdown or disconnection
+                await self._shutdown_event.wait()
+
+            except Exception as e:
+                _log.error(f"Socket.IO connection error: {e}")
+                self._handle_connection_error(f"Connection error: {e}")
+
+            # Wait before reconnecting
+            if self.is_running:
+                await asyncio.sleep(self.reconnect_interval)
 
     def broadcast(self, message: str) -> bool:
         """Broadcast a message to connected clients. Returns True if sent successfully."""
@@ -224,19 +255,28 @@ class WebSocketBroadcaster(QObject):
             _log.error("Message must be a string")
             return False
 
-        if not self._is_connected or not self.websocket or not self._loop:
+        if not self._is_connected or not self.sio or not self._loop:
             _log.debug("Cannot broadcast: not connected")
             return False
 
         try:
             # Validate JSON if it looks like JSON
             if message.strip().startswith("{"):
-                json.loads(message)  # Validate JSON format
+                data = json.loads(message)  # Validate JSON format
+                event_type = data.get("type", "roast_data")
 
-            asyncio.run_coroutine_threadsafe(self._send_message(message), self._loop)
+                # Use Socket.IO emit with acknowledgment
+                asyncio.run_coroutine_threadsafe(self._emit_with_ack(event_type, data), self._loop)
+            else:
+                # Raw message
+                asyncio.run_coroutine_threadsafe(
+                    self._emit_with_ack("message", {"data": message}), self._loop
+                )
+
             with self._lock:
                 self._stats["messages_sent"] += 1
             return True
+
         except json.JSONDecodeError:
             _log.error("Invalid JSON message")
             return False
@@ -246,7 +286,7 @@ class WebSocketBroadcaster(QObject):
 
     def is_connected(self) -> bool:
         """Check if connected to server"""
-        return self._is_connected and self.websocket is not None
+        return self._is_connected and self.sio is not None
 
     def _emit_pending_signals(self) -> None:
         """Emit pending signals from the main thread"""
@@ -265,6 +305,10 @@ class WebSocketBroadcaster(QObject):
                         self.error.emit(args[0])
                     elif signal_type == "message":
                         self.message_received.emit(args[0])
+                    elif signal_type == "reconnecting":
+                        self.reconnecting.emit()
+                    elif signal_type == "reconnected":
+                        self.reconnected.emit()
                 except Exception as e:
                     _log.error(f"Error emitting {signal_type} signal: {e}")
         except Exception as e:
@@ -285,10 +329,10 @@ class WebSocketBroadcaster(QObject):
         try:
             self._loop.run_until_complete(self._connect_and_run())
         except Exception as e:
-            _log.error(f"WebSocket loop error: {e}")
+            _log.error(f"Socket.IO loop error: {e}")
             self._queue_signal("error", f"Event loop error: {e}")
         finally:
-            _log.info("Closing WebSocket event loop")
+            _log.info("Closing Socket.IO event loop")
             try:
                 # Cancel all pending tasks
                 tasks = asyncio.all_tasks(loop=self._loop)
@@ -307,91 +351,166 @@ class WebSocketBroadcaster(QObject):
             except Exception as e:
                 _log.error(f"Error during loop cleanup: {e}")
 
-    async def _connect_and_run(self) -> None:
-        """Connect to WebSocket server and handle messages"""
-        while self.is_running:
+    def _setup_socketio_handlers(self) -> None:
+        """Setup Socket.IO event handlers"""
+        if not self.sio:
+            return
+
+        @self.sio.event
+        async def connect(): # noqa
+            """Handle successful connection"""
+            self._is_connected = True
+            self._connection_start_time = time.time()
+            self.reconnect_attempts = 0
+            self._stats["last_connection_time"] = time.time()
+
+            # Emit connection signal
+            self._queue_signal("connected")
+
+            # Call connection handlers
+            for handler in self._connection_handlers:
+                try:
+                    handler()
+                except Exception as e:
+                    _log.error(f"Connection handler error: {e}")
+
+            _log.info(f"Connected to Socket.IO server at {self.url}")
+
+            # Send identification
             try:
-                # Connection timeout
-                connect_task = websockets.connect(
-                    self.url, ping_interval=self.ping_interval, ping_timeout=10.0, close_timeout=5.0
+                await self.sio.emit(
+                    "artisan_client_identification",
+                    {
+                        "client_type": "artisan_plugin",
+                        "version": "2.0.0",
+                        "capabilities": ["roast_data", "monitoring_data", "roast_events"],
+                    },
                 )
-
-                async with asyncio.timeout(self.connection_timeout):
-                    async with connect_task as websocket:
-                        await self._handle_connection(websocket)
-
-            except asyncio.TimeoutError:
-                _log.warning(f"Connection timeout to {self.url}")
-                self._handle_connection_error("Connection timeout")
-            except (
-                websockets.exceptions.ConnectionClosed,
-                websockets.exceptions.InvalidURI,
-                asyncio.CancelledError,
-            ):
-                _log.info("Connection closed or cancelled")
-                self._handle_connection_error("Connection closed")
-            except ConnectionRefusedError:
-                _log.warning(f"Connection refused to {self.url}")
-                self._handle_connection_error("Connection refused")
+                _log.debug("Sent identification to server")
             except Exception as e:
-                _log.error(f"Unexpected connection error: {e}")
-                self._handle_connection_error(f"Connection error: {e}")
+                _log.error(f"Failed to send identification: {e}")
 
-            # Wait before reconnecting
-            if self.is_running:
-                await asyncio.sleep(self.reconnect_interval)
+        @self.sio.event
+        async def disconnect(): # noqa
+            """Handle disconnection"""
+            self._is_connected = False
+            if self._connection_start_time:
+                self._stats["total_uptime"] += time.time() - self._connection_start_time
+                self._connection_start_time = None
 
-    async def _handle_connection(self, websocket: "websockets.WebSocketClientProtocol") -> None:
-        """Handle an active WebSocket connection"""
-        self.websocket = websocket
-        self._is_connected = True
-        self._connection_start_time = time.time()
-        self.reconnect_attempts = 0
+            # Emit disconnection signal
+            self._queue_signal("disconnected")
 
-        # Emit connection signal
-        self._queue_signal("connected")
+            # Call disconnection handlers
+            for handler in self._disconnection_handlers:
+                try:
+                    handler()
+                except Exception as e:
+                    _log.error(f"Disconnection handler error: {e}")
 
-        # Call connection handlers
-        for handler in self._connection_handlers:
-            try:
-                handler()
-            except Exception as e:
-                _log.error(f"Connection handler error: {e}")
+            _log.info("Disconnected from Socket.IO server")
 
-        _log.info(f"Connected to WebSocket server at {self.url}")
+        @self.sio.event
+        async def connect_error(data): 
+            """Handle connection errors"""
+            _log.error(f"Socket.IO connection error: {data}")
+            self._handle_connection_error(f"Connection error: {data}")
 
-        # Send identification
+        @self.sio.event
+        async def reconnect(attempt_number):
+            """Handle reconnection"""
+            _log.info(f"Reconnecting to Socket.IO server (attempt {attempt_number})")
+            self._queue_signal("reconnecting")
+            self.reconnect_attempts += 1
+            self._stats["reconnection_attempts"] += 1
+
+        @self.sio.event
+        async def reconnect_attempt(attempt_number):
+            """Handle reconnection attempts"""
+            _log.debug(f"Reconnection attempt {attempt_number}")
+
+        @self.sio.event
+        async def reconnect_failed():
+            """Handle failed reconnection"""
+            _log.error("Failed to reconnect to Socket.IO server")
+            self._queue_signal("error", "Reconnection failed")
+
+        # Handle custom events
+        @self.sio.on("*")
+        async def catch_all(event, data):
+            """Handle all other events"""
+            await self._handle_socketio_message(event, data)
+
+    async def _handle_socketio_message(self, event: str, data: Any) -> None:
+        """Handle incoming Socket.IO messages"""
         try:
-            await websocket.send(json.dumps({"type": "artisan_client_identification"}))
-            _log.debug("Sent identification to server")
+            message_data = {"type": event, "data": data, "timestamp": time.time()}
+
+            _log.debug(f"Received Socket.IO event: {event} with data: {data}")
+
+            with self._lock:
+                self._stats["messages_received"] += 1
+
+            # Emit message signal
+            self._queue_signal("message", message_data)
+
+            # Call message callbacks
+            for callback in self._message_callbacks:
+                try:
+                    callback(message_data)
+                except Exception as e:
+                    _log.error(f"Message callback error: {e}")
+
         except Exception as e:
-            _log.error(f"Failed to send identification: {e}")
+            _log.error(f"Error handling Socket.IO message: {e}")
 
-        # Start ping task
-        self._ping_task = asyncio.create_task(self._ping_loop())
-
-        # Handle messages and shutdown
-        consumer_task = asyncio.create_task(self._consumer_handler(websocket))
-        shutdown_task = asyncio.create_task(self._shutdown_event.wait())
+    async def _emit_with_ack(self, event: str, data: Any) -> None:
+        """Emit Socket.IO event with acknowledgment"""
+        if not self.sio or not self._is_connected:
+            return
 
         try:
-            done, pending = await asyncio.wait(
-                {consumer_task, shutdown_task}, return_when=asyncio.FIRST_COMPLETED
-            )
+            # Use emit with acknowledgment for reliability
+            await self.sio.emit(event, data, callback=self._ack_callback)
+            _log.debug(f"Emitted Socket.IO event: {event}")
+        except Exception as e:
+            _log.error(f"Failed to emit Socket.IO event {event}: {e}")
+            self._queue_signal("error", f"Emit error: {e}")
 
-            for task in pending:
-                task.cancel()
+    def _ack_callback(self, *args):
+        """Handle Socket.IO acknowledgment"""
+        _log.debug(f"Socket.IO acknowledgment received: {args}")
+
+    async def _connection_refresh_loop(self) -> None:
+        """Periodically refresh connections for long-lived sessions"""
+        try:
+            while self._is_connected and not self._shutdown_event.is_set():
+                await asyncio.sleep(self.connection_refresh_interval)
+
+                if self._is_connected and self.sio:
+                    _log.info("Refreshing Socket.IO connection...")
+
+                    try:
+                        # Disconnect and reconnect to refresh
+                        await self.sio.disconnect()
+                        await asyncio.sleep(1)  # Brief pause
+                        await self.sio.connect(self.url)
+
+                        self._stats["connection_refreshes"] += 1
+                        self._last_connection_refresh = time.time()
+                        _log.info("Socket.IO connection refreshed successfully")
+
+                    except Exception as e:
+                        _log.error(f"Failed to refresh Socket.IO connection: {e}")
+                        self._queue_signal("error", f"Connection refresh failed: {e}")
 
         except asyncio.CancelledError:
-            _log.info("Connection tasks cancelled")
-        finally:
-            if self._ping_task and not self._ping_task.done():
-                self._ping_task.cancel()
+            _log.debug("Connection refresh loop cancelled")
 
     def _handle_connection_error(self, error_msg: str) -> None:
         """Handle connection errors and update state"""
         self._is_connected = False
-        self.websocket = None
+        self.sio = None
 
         if self._connection_start_time:
             self._stats["total_uptime"] += time.time() - self._connection_start_time
@@ -422,83 +541,10 @@ class WebSocketBroadcaster(QObject):
                 f"Reconnection attempt {self.reconnect_attempts}/{self.max_reconnect_attempts}"
             )
 
-    async def _ping_loop(self) -> None:
-        """Send periodic ping messages to keep connection alive"""
-        try:
-            while self._is_connected and not self._shutdown_event.is_set():
-                await asyncio.sleep(self.ping_interval)
-                if self._is_connected and self.websocket:
-                    try:
-                        await self.websocket.ping()
-                        _log.debug("Sent ping")
-                    except Exception as e:
-                        _log.warning(f"Ping failed: {e}")
-                        break
-        except asyncio.CancelledError:
-            _log.debug("Ping loop cancelled")
 
-    async def _send_message(self, message: str) -> None:
-        """Send a message to the WebSocket server"""
-        if not self.websocket or not self._is_connected:
-            return
-
-        try:
-            await self.websocket.send(message)
-            _log.debug(f"Sent message: {message[:100]}...")
-        except websockets.exceptions.ConnectionClosed:
-            _log.warning("Connection closed while sending message")
-            self._is_connected = False
-        except Exception as e:
-            _log.error(f"Failed to send message: {e}")
-            self._is_connected = False
-            self._queue_signal("error", f"Send error: {e}")
-
-    async def _consumer_handler(self, websocket: "websockets.WebSocketClientProtocol") -> None:
-        """Handle incoming messages"""
-        try:
-            async for message in websocket:
-                await self._handle_message(message)
-        except websockets.exceptions.ConnectionClosed:
-            _log.info("Connection closed by server")
-        except asyncio.CancelledError:
-            _log.info("Consumer task cancelled")
-        finally:
-            if self._is_connected:
-                self._is_connected = False
-                self._queue_signal("disconnected")
-
-    async def _handle_message(self, message: str) -> None:
-        """Handle incoming messages from the server"""
-        try:
-            data = json.loads(message)
-            _log.debug(f"Received message: {data}")
-
-            with self._lock:
-                self._stats["messages_received"] += 1
-
-            # Emit message signal
-            self._queue_signal("message", data)
-
-            # Call message callbacks
-            for callback in self._message_callbacks:
-                try:
-                    callback(data)
-                except Exception as e:
-                    _log.error(f"Message callback error: {e}")
-
-            # Handle ping/pong
-            if data.get("type") == "ping":
-                await self._send_message(json.dumps({"type": "pong"}))
-
-        except json.JSONDecodeError:
-            _log.warning(f"Received non-JSON message: {message[:100]}...")
-        except Exception as e:
-            _log.error(f"Error handling message: {e}")
-
-
-# Check if websockets is available and log a warning if not
-if not WEBSOCKETS_AVAILABLE:
+# Check if socketio is available and log a warning if not
+if not SOCKETIO_AVAILABLE:
     _log.warning(
-        "websockets library not found. Live broadcasting will not be available. "
-        "Install with: pip install websockets"
+        "python-socketio library not found. Live broadcasting will not be available. "
+        "Install with: pip install python-socketio"
     )

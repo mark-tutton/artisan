@@ -13,8 +13,8 @@ except ImportError as e:
 
 PLUGIN_NAME = "Live Broadcast"
 PLUGIN_VERSION = "1.0.0"
-PLUGIN_DESCRIPTION = "Real-time roast data broadcasting via WebSockets"
-PLUGIN_REQUIREMENTS = ["websockets"]
+PLUGIN_DESCRIPTION = "Real-time roast data broadcasting via Socket.IO"
+PLUGIN_REQUIREMENTS = ["python-socketio"]
 
 def get_plugin_info():
     """Get plugin information for registration"""

@@ -1,3 +1,4 @@
+
 import sys
 import logging
 import traceback
@@ -47,7 +48,8 @@ except ImportError:
     from PyQt5.QtGui import QFont, QIcon
 
 from .config import LiveBroadcastConfig
-from .websocket_client import WEBSOCKETS_AVAILABLE
+# from .websocket_client import WEBSOCKETS_AVAILABLE
+from .websocket_client import SOCKETIO_AVAILABLE
 
 _log = logging.getLogger(__name__)
 
@@ -127,13 +129,14 @@ class LiveBroadcastConfigDialog(QDialog):
 
             self.port_spin = QSpinBox()
             self.port_spin.setRange(1, 65535)
-            self.port_spin.setValue(3001)
-            self.port_spin.setToolTip("WebSocket server port")
+            # self.port_spin.setValue(3001)
+            self.port_spin.setValue(5001)
+            self.port_spin.setToolTip("Socket.IO server port")
             server_layout.addRow("Port:", self.port_spin)
 
             self.path_edit = QLineEdit()
-            self.path_edit.setPlaceholderText("/ws/roast")
-            self.path_edit.setToolTip("WebSocket server path")
+            self.path_edit.setPlaceholderText("/socket.io/")
+            self.path_edit.setToolTip("Socket.IO server path")
             server_layout.addRow("Path:", self.path_edit)
 
             server_group.setLayout(server_layout)
@@ -185,13 +188,13 @@ class LiveBroadcastConfigDialog(QDialog):
             test_group.setLayout(test_layout)
             layout.addWidget(test_group)
 
-            # WebSocket availability warning
-            if not WEBSOCKETS_AVAILABLE:
-                warning_label = QLabel("⚠️ websockets library not available")
+            # Socket.IO availability warning
+            if not SOCKETIO_AVAILABLE:
+                warning_label = QLabel("⚠️ socketio library not available")
                 warning_label.setStyleSheet("color: red; font-weight: bold;")
                 layout.addWidget(warning_label)
 
-                install_label = QLabel("Install with: pip install websockets")
+                install_label = QLabel("Install with: pip install python-socketio")
                 install_label.setStyleSheet("color: gray;")
                 layout.addWidget(install_label)
 
@@ -664,10 +667,11 @@ class LiveBroadcastConfigDialog(QDialog):
 
     def test_connection(self):
         """Test WebSocket connection with comprehensive error handling"""
-        if not WEBSOCKETS_AVAILABLE:
+
+        if not SOCKETIO_AVAILABLE:
             self.show_warning(
                 "Test Connection",
-                "websockets library not available. Install with: pip install websockets",
+                "socketio library not available. Install with: pip install python-socketio",
             )
             return
 
@@ -701,7 +705,7 @@ class LiveBroadcastConfigDialog(QDialog):
     def _perform_connection_test(self, host: str, port: int, path: str):
         """Perform the actual connection test"""
         try:
-            from .websocket_client import WebSocketBroadcaster
+            from .websocket_client import SocketIOBroadcaster
             import asyncio
             import threading
 
@@ -712,7 +716,7 @@ class LiveBroadcastConfigDialog(QDialog):
 
                     async def test():
                         try:
-                            test_broadcaster = WebSocketBroadcaster(host, port, path)
+                            test_broadcaster = SocketIOBroadcaster(host, port, path)
                             test_broadcaster.start()
 
                             # Wait for connection
