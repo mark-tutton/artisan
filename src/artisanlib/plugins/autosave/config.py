@@ -18,12 +18,12 @@ class AutosaveAddonConfig:
     
     # Format 3 settings
     autosave_pdf_3: bool = False
-    autosave_image_type_3: str = "PDF"
+    autosave_image_type_3: str = "PDF Report"
     autosave_path_3: str = ""
     
     # Server upload settings
     autosave_upload_to_server: bool = False
-    autosave_server_url: str = "http://localhost:4000/upload"
+    autosave_server_url: str = "http://localhost:4000"
     autosave_api_token: str = ""
     autosave_jwt_token: str = ""
     autosave_auth_type: str = "none"  # "none", "api_token", "jwt", "bearer"

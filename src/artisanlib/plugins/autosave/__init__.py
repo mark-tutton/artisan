@@ -9,6 +9,8 @@ from .autosave_addons import (
     create_additional_format_widgets,
     save_widget_values_to_config,
     load_config_to_qmc,
+    integrate_with_automaticsave,
+    should_upload_to_server,
     cleanup
 )
 
@@ -21,5 +23,7 @@ __all__ = [
     'create_additional_format_widgets',
     'save_widget_values_to_config',
     'load_config_to_qmc',
+    'integrate_with_automaticsave',
+    'should_upload_to_server',
     'cleanup'
 ]

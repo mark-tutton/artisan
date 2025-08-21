@@ -193,7 +193,11 @@ class autosaveDlg(ArtisanDialog):
             autolayout.addWidget(self.pathAlsoEdit3, 10, 1, 1, 2)
             
             # Add server upload group box to layout
-            autolayout.addWidget(self.uploadGroupBox, 11, 0, 1, 3) 
+            autolayout.addWidget(self.uploadGroupBox, 11, 0, 1, 3)
+            
+            # Integrate with the existing automaticsave method
+            from artisanlib.plugins.autosave.autosave_addons import integrate_with_automaticsave
+            integrate_with_automaticsave(self.aw)
         else:
             # Fallback - disable addon features
             self.autopdfcheckbox2 = None
@@ -278,7 +282,7 @@ class autosaveDlg(ArtisanDialog):
             from artisanlib.plugins.autosave.autosave_addons import save_widget_values_to_config
             
             save_widget_values_to_config(
-                self.uploadGroupBox,  # Pass the group box instead of individual widgets
+                self.uploadGroupBox, 
                 self.autopdfcheckbox2, self.imageTypesComboBox2, self.pathAlsoEdit2,
                 self.autopdfcheckbox3, self.imageTypesComboBox3, self.pathAlsoEdit3
             )
