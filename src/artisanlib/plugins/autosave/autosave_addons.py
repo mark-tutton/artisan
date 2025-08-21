@@ -263,13 +263,13 @@ def create_server_upload_widgets(aw):
     # Create main group box
     group_box = QGroupBox(QApplication.translate("GroupBox", "Server Upload Settings"))
     layout = QVBoxLayout()
-
+    
     # Create the checkbox
     uploadToServerCheckbox = QCheckBox(
         QApplication.translate("CheckBox", "Upload to external server")
     )
     uploadToServerCheckbox.setChecked(_config.autosave_upload_to_server)
-
+    
     # Create the server URL input
     serverUrlEdit = QLineEdit(_config.autosave_server_url)
     serverUrlEdit.setPlaceholderText("http://localhost:4000")

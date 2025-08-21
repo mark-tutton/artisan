@@ -105,30 +105,28 @@ class InventoryFetcherPlugin(ArtisanPlugin):
                 )
 
     def fetch_beans(self):
-        """Fetch beans from server"""
+        """Fetch coffees from server with pagination support"""
         if not self.fetcher:
             QMessageBox.warning(self.main_window, "Warning", "Please configure server URL first!")
             return
 
         try:
-            self.logger.info("Fetching beans from server")
-            result = self.fetcher.fetch_beans()
-            if isinstance(result, dict) and "data" in result:
-                self.beans_data = result["data"]
-            else:
-                self.beans_data = result
+            self.logger.info("Fetching coffees from server")
+            
+            result = self.fetcher.fetch_all_beans(batch_size=1000) 
+            self.beans_data = result
 
             if self.config.show_notifications:
-                self.main_window.sendmessage(f"Fetched {len(self.beans_data)} beans from server")
+                self.main_window.sendmessage(f"Fetched {len(self.beans_data)} coffees from server")
 
-            self.logger.info(f"Successfully fetched {len(self.beans_data)} beans")
+            self.logger.info(f"Successfully fetched {len(self.beans_data)} coffees")
             self.signals.inventory_updated.emit(self.beans_data)
 
         except Exception as e:
-            self.logger.error(f"Failed to fetch beans: {e}")
+            self.logger.error(f"Failed to fetch coffees: {e}")
             if self.config.show_notifications:
-                QMessageBox.critical(self.main_window, "Error", f"Failed to fetch beans: {e}")
-    
+                QMessageBox.critical(self.main_window, "Error", f"Failed to fetch coffees: {e}")
+
     def refresh_beans(self):
         """Refresh beans data"""
         self.fetch_beans()
