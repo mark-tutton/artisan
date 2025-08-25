@@ -71,6 +71,11 @@ class LiveBroadcastConfig:
     # Security
     enforce_secure_connection: bool = True  # Force WSS in production
     validate_ssl_cert: bool = True
+
+    # JWT Authentication
+    jwt_issuer: Optional[str] = None  # Expected JWT issuer
+    jwt_audience: Optional[str] = None  # Expected JWT audience
+    jwt_validation_enabled: bool = True  # Enable/disable JWT validation
     
 
     def __post_init__(self):

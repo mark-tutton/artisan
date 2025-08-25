@@ -1,4 +1,3 @@
-
 import sys
 import logging
 import traceback
@@ -48,7 +47,6 @@ except ImportError:
     from PyQt5.QtGui import QFont, QIcon
 
 from .config import LiveBroadcastConfig
-# from .websocket_client import WEBSOCKETS_AVAILABLE
 from .websocket_client import SOCKETIO_AVAILABLE
 
 _log = logging.getLogger(__name__)
@@ -62,7 +60,7 @@ class LiveBroadcastConfigDialog(QDialog):
     def __init__(self, parent, config: LiveBroadcastConfig):
         super().__init__(parent)
         self.config = config
-        self.original_config = config.to_dict()  
+        self.original_config = config.to_dict()
         self.test_in_progress = False
 
         self.setup_ui()
@@ -81,7 +79,7 @@ class LiveBroadcastConfigDialog(QDialog):
             try:
                 self.setWindowIcon(QIcon(":/icons/broadcast.png"))
             except:
-                pass  
+                pass
 
             # Create tab widget
             self.tab_widget = QTabWidget()
@@ -124,7 +122,7 @@ class LiveBroadcastConfigDialog(QDialog):
 
             self.host_edit = QLineEdit()
             self.host_edit.setPlaceholderText("localhost")
-            self.host_edit.setToolTip("WebSocket server hostname or IP address")
+            self.host_edit.setToolTip("Socket.IO server hostname or IP address")
             server_layout.addRow("Host:", self.host_edit)
 
             self.port_spin = QSpinBox()
@@ -141,6 +139,67 @@ class LiveBroadcastConfigDialog(QDialog):
 
             server_group.setLayout(server_layout)
             layout.addWidget(server_group)
+
+            # Security and Authentication group
+            security_group = QGroupBox("Security & Authentication")
+            security_layout = QFormLayout()
+
+            self.use_ssl_check = QCheckBox("Use SSL/TLS (WSS)")
+            self.use_ssl_check.setToolTip("Enable secure WebSocket connection")
+            security_layout.addRow(self.use_ssl_check)
+
+            self.auth_token_edit = QLineEdit()
+            self.auth_token_edit.setPlaceholderText("Enter JWT token")
+            self.auth_token_edit.setToolTip("JWT authentication token for server access")
+
+            try:
+                # PyQt6
+                self.auth_token_edit.setEchoMode(QLineEdit.Password)
+            except AttributeError:
+                # PyQt5
+                self.auth_token_edit.setEchoMode(QLineEdit.EchoMode.Password)
+
+            # Show/hide token button
+            self.show_token_button = QPushButton("�� Show")
+            self.show_token_button.setCheckable(True)
+            self.show_token_button.setToolTip("Toggle token visibility")
+            self.show_token_button.toggled.connect(self.toggle_token_visibility)
+
+            token_layout = QHBoxLayout()
+            token_layout.addWidget(self.auth_token_edit)
+            token_layout.addWidget(self.show_token_button)
+            security_layout.addRow("JWT Token:", token_layout)
+
+            # JWT Issuer
+            self.jwt_issuer_edit = QLineEdit()
+            self.jwt_issuer_edit.setPlaceholderText("https://your-domain.com")
+            self.jwt_issuer_edit.setToolTip("Expected JWT issuer (iss claim)")
+            security_layout.addRow("Expected Issuer:", self.jwt_issuer_edit)
+
+            # JWT Audience
+            self.jwt_audience_edit = QLineEdit()
+            self.jwt_audience_edit.setPlaceholderText("artisan-broadcast")
+            self.jwt_audience_edit.setToolTip("Expected JWT audience (aud claim)")
+            security_layout.addRow("Expected Audience:", self.jwt_audience_edit)
+
+            # JWT Validation toggle
+            self.jwt_validation_check = QCheckBox("Enable JWT Validation")
+            self.jwt_validation_check.setChecked(True)
+            self.jwt_validation_check.setToolTip("Enable JWT token validation")
+            security_layout.addRow("", self.jwt_validation_check)
+
+            self.validate_ssl_check = QCheckBox("Validate SSL Certificate")
+            self.validate_ssl_check.setToolTip("Validate server SSL certificate")
+            self.validate_ssl_check.setChecked(True)
+            security_layout.addRow(self.validate_ssl_check)
+
+            self.enforce_secure_check = QCheckBox("Enforce Secure Connection")
+            self.enforce_secure_check.setToolTip("Force secure connections in production")
+            self.enforce_secure_check.setChecked(True)
+            security_layout.addRow(self.enforce_secure_check)
+
+            security_group.setLayout(security_layout)
+            layout.addWidget(security_group)
 
             # Connection settings group
             conn_group = QGroupBox("Connection Settings")
@@ -164,6 +223,13 @@ class LiveBroadcastConfigDialog(QDialog):
             self.heartbeat_interval_spin.setSuffix(" seconds")
             self.heartbeat_interval_spin.setToolTip("Interval for heartbeat messages")
             conn_layout.addRow("Heartbeat Interval:", self.heartbeat_interval_spin)
+
+            self.connection_refresh_spin = QDoubleSpinBox()
+            self.connection_refresh_spin.setRange(300.0, 7200.0)  # 5 min to 2 hours
+            self.connection_refresh_spin.setValue(3600.0)
+            self.connection_refresh_spin.setSuffix(" seconds")
+            self.connection_refresh_spin.setToolTip("Interval to refresh JWT token and connection")
+            conn_layout.addRow("Connection Refresh:", self.connection_refresh_spin)
 
             conn_group.setLayout(conn_layout)
             layout.addWidget(conn_group)
@@ -351,7 +417,6 @@ class LiveBroadcastConfigDialog(QDialog):
             self.advanced_widget = QWidget()
             layout = QVBoxLayout()
 
-
             logging_group = QGroupBox("Logging Settings")
             logging_layout = QFormLayout()
 
@@ -457,6 +522,48 @@ class LiveBroadcastConfigDialog(QDialog):
         except Exception as e:
             _log.error(f"Error setting up validation: {e}")
 
+    # def toggle_token_visibility(self, checked: bool):
+    #     """Toggle JWT token visibility"""
+    #     try:
+    #         if checked:
+    #             self.auth_token_edit.setEchoMode(QLineEdit.Normal)
+    #             self.show_token_button.setText("🙈 Hide")
+    #             self.show_token_button.setToolTip("Hide JWT token")
+    #         else:
+    #             self.auth_token_edit.setEchoMode(QLineEdit.Password)
+    #             self.show_token_button.setText("👁 Show")
+    #             self.show_token_button.setToolTip("Show JWT token")
+    #     except Exception as e:
+    #         _log.error(f"Error toggling token visibility: {e}")
+
+    def toggle_token_visibility(self, checked: bool):
+        """Toggle JWT token visibility"""
+        try:
+            if checked:
+                # Handle both PyQt5 and PyQt6
+                try:
+                    # PyQt6
+                    self.auth_token_edit.setEchoMode(QLineEdit.Normal)
+                except AttributeError:
+                    # PyQt5
+                    self.auth_token_edit.setEchoMode(QLineEdit.EchoMode.Normal)
+                
+                self.show_token_button.setText("Hide")
+                self.show_token_button.setToolTip("Hide JWT token")
+            else:
+                # Handle both PyQt5 and PyQt6
+                try:
+                    # PyQt6
+                    self.auth_token_edit.setEchoMode(QLineEdit.Password)
+                except AttributeError:
+                    # PyQt5
+                    self.auth_token_edit.setEchoMode(QLineEdit.EchoMode.Password)
+                
+                self.show_token_button.setText("Show")
+                self.show_token_button.setToolTip("Show JWT token")
+        except Exception as e:
+            _log.error(f"Error toggling token visibility: {e}")
+
     def load_config(self):
         """Load configuration into UI with error handling"""
         try:
@@ -465,10 +572,20 @@ class LiveBroadcastConfigDialog(QDialog):
             self.port_spin.setValue(self.config.server_port)
             self.path_edit.setText(self.config.server_path)
 
+            # Security settings
+            self.use_ssl_check.setChecked(self.config.use_ssl)
+            self.auth_token_edit.setText(self.config.auth_token or "")
+            self.jwt_issuer_edit.setText(self.config.jwt_issuer or "")
+            self.jwt_audience_edit.setText(self.config.jwt_audience or "")
+            self.jwt_validation_check.setChecked(self.config.jwt_validation_enabled)
+            self.validate_ssl_check.setChecked(self.config.validate_ssl_cert)
+            self.enforce_secure_check.setChecked(self.config.enforce_secure_connection)
+
             # Connection settings
             self.reconnect_interval_spin.setValue(self.config.reconnect_interval)
             self.max_reconnect_spin.setValue(self.config.max_reconnect_attempts)
             self.heartbeat_interval_spin.setValue(self.config.heartbeat_interval)
+            self.connection_refresh_spin.setValue(self.config.connection_refresh_interval)
 
             # Broadcasting settings
             self.auto_start_check.setChecked(self.config.auto_start)
@@ -521,10 +638,20 @@ class LiveBroadcastConfigDialog(QDialog):
             self.config.server_port = self.port_spin.value()
             self.config.server_path = self.path_edit.text().strip()
 
+            # Security settings
+            self.config.use_ssl = self.use_ssl_check.isChecked()
+            self.config.auth_token = self.auth_token_edit.text().strip() or None
+            self.config.jwt_issuer = self.jwt_issuer_edit.text().strip() or None
+            self.config.jwt_audience = self.jwt_audience_edit.text().strip() or None
+            self.config.jwt_validation_enabled = self.jwt_validation_check.isChecked()
+            self.config.validate_ssl_cert = self.validate_ssl_check.isChecked()
+            self.config.enforce_secure_connection = self.enforce_secure_check.isChecked()
+
             # Connection settings
             self.config.reconnect_interval = self.reconnect_interval_spin.value()
             self.config.max_reconnect_attempts = self.max_reconnect_spin.value()
             self.config.heartbeat_interval = self.heartbeat_interval_spin.value()
+            self.config.connection_refresh_interval = self.connection_refresh_spin.value()
 
             # Broadcasting settings
             self.config.auto_start = self.auto_start_check.isChecked()
@@ -562,6 +689,49 @@ class LiveBroadcastConfigDialog(QDialog):
         except Exception as e:
             _log.error(f"Error saving configuration: {e}")
             raise
+
+    def validate_config(self):
+        """Validate configuration values"""
+        try:
+            errors = []
+
+            # Server validation
+            if not self.config.server_host.strip():
+                errors.append("Server host cannot be empty")
+
+            if self.config.server_port < 1 or self.config.server_port > 65535:
+                errors.append("Server port must be between 1 and 65535")
+
+            if not self.config.socketio_path.startswith("/"):
+                errors.append("Socket.IO path must start with '/'")
+
+            # Security validation
+            if self.config.use_ssl and not self.config.auth_token.strip():
+                errors.append("JWT token is required for secure connections")
+
+            if self.config.enforce_secure_connection and not self.config.use_ssl:
+                errors.append("Secure connection enforcement requires SSL/TLS")
+
+            # Connection validation
+            if self.config.reconnect_interval < 1.0:
+                errors.append("Reconnect interval must be at least 1 second")
+
+            if self.config.connection_refresh_interval < 300.0:
+                errors.append("Connection refresh interval must be at least 5 minutes")
+
+            if errors:
+                error_msg = "\n".join(errors)
+                self.show_error(
+                    "Validation Error", f"Configuration validation failed:\n\n{error_msg}"
+                )
+                return False
+
+            return True
+
+        except Exception as e:
+            _log.error(f"Error validating config: {e}")
+            self.show_error("Validation Error", f"Failed to validate configuration: {e}")
+            return False
 
     def validate_host(self) -> bool:
         """Validate host input"""

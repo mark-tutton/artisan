@@ -15,8 +15,7 @@ try:
     from PyQt6.QtGui import QAction
     from PyQt6.QtCore import QTimer, pyqtSignal, QObject
 except ImportError:
-    from PyQt5.QtWidgets import QMenu, QMainWindow, QMessageBox, QDialog
-    from PyQt5.QtGui import QAction
+    from PyQt5.QtWidgets import QMenu, QMainWindow, QMessageBox, QDialog, QAction
     from PyQt5.QtCore import QTimer, pyqtSignal, QObject
 
 
@@ -138,7 +137,15 @@ class LiveBroadcastPlugin(PluginBase):
             self._change_state(PluginState.INITIALIZING)
             self.main_window = main_window
 
-            self._initialize_plugin()
+   
+            # # Initialize broadcaster if auto-start is enabled
+            if self.config.auto_start:
+                self._initialize_broadcaster() // TODO: revist this
+
+                
+            # self._initialize_plugin() 
+         
+            
 
             self._change_state(PluginState.ACTIVE)
             self.initialization_time = datetime.now()
@@ -270,6 +277,22 @@ class LiveBroadcastPlugin(PluginBase):
         except Exception as e:
             self._record_error("InitializationError", str(e))
             raise
+
+    def _initialize_broadcaster(self) -> None:
+        """Initialize the WebSocket broadcaster"""
+        try:
+            if SOCKETIO_AVAILABLE and not self.broadcaster:
+                self.broadcaster = SocketIOBroadcaster(
+                    host=self.config.server_host,
+                    port=self.config.server_port,
+                    config=self.config
+                )
+                self.logger.info("SocketIO broadcaster initialized")
+            elif not SOCKETIO_AVAILABLE:
+                self.logger.warning("SocketIO not available, broadcaster disabled")
+        except Exception as e:
+            self.logger.error(f"Failed to initialize broadcaster: {e}")
+
 
     def _setup_main_window_connections(self) -> None:
         """Setup connections to main window signals"""
