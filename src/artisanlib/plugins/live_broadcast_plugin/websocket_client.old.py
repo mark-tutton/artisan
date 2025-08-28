@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 
 try:
     import socketio
+
     SOCKETIO_AVAILABLE = True
 except ImportError:
     socketio = None
@@ -16,14 +17,15 @@ except ImportError:
 
 # PyQt imports
 try:
-    from PyQt6.QtCore import QObject, pyqtSignal, QTimer, QThread, QMutex
+    from PyQt6.QtCore import QObject, pyqtSignal, QTimer
 except ImportError:
-    from PyQt5.QtCore import QObject, pyqtSignal, QTimer, QThread, QMutex
+    from PyQt5.QtCore import QObject, pyqtSignal, QTimer
 
 _log = logging.getLogger(__name__)
 
+
 class SocketIOBroadcaster(QObject):
-    """Socket.IO client for broadcasting roast data with proper PyQt threading"""
+    """Socket.IO client for broadcasting roast data"""
 
     # PyQt signals
     connected = pyqtSignal()
@@ -62,12 +64,16 @@ class SocketIOBroadcaster(QObject):
         self.path = path if path.startswith("/") else f"/{path}"
         self.auth_token = auth_token
 
-        # Build URL with proper protocol
+        # # Build URL with proper protocol
+        # protocol = "wss" if secure else "ws"
+        # self.url = f"{protocol}://{self.host}:{self.port}{self.path}"
+
         protocol = "https" if secure else "http"
         self.url = f"{protocol}://{self.host}:{self.port}"
         
         # Extract the Socket.IO path from the full path
         self.socketio_path = self.path.strip("/")
+
 
         # Connection settings
         self.reconnect_interval = reconnect_interval
@@ -89,10 +95,6 @@ class SocketIOBroadcaster(QObject):
         self._token_refresh_attempts = 0
         self._max_token_refresh_attempts = 3
 
-        # PyQt threading support
-        self._worker_thread: Optional[QThread] = None
-        self._mutex = QMutex()
-        
         # Threading and async
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[Thread] = None
@@ -140,7 +142,7 @@ class SocketIOBroadcaster(QObject):
             _log.debug("JWT token updated successfully")
             
             # If connected, try to refresh the connection with new token
-            if self._is_connected and self.sio and self._loop:
+            if self._is_connected and self.sio:
                 asyncio.run_coroutine_threadsafe(self._refresh_connection_with_new_token(), self._loop)
                 
         except Exception as e:
@@ -342,17 +344,14 @@ class SocketIOBroadcaster(QObject):
 
     def get_stats(self) -> Dict[str, Any]:
         """Get connection statistics"""
-        self._mutex.lock()
-        try:
+        with self._lock:
             stats = self._stats.copy()
             if self._connection_start_time:
                 stats["current_uptime"] = time.time() - self._connection_start_time
             return stats
-        finally:
-            self._mutex.unlock()
         
     def start(self) -> bool:
-        """Start the Socket.IO client using PyQt threading"""
+        """Start the Socket.IO client"""
         if self.is_running:
             _log.warning("Socket.IO broadcaster is already running")
             return True
@@ -362,15 +361,13 @@ class SocketIOBroadcaster(QObject):
             return False
 
         try:
-            self._mutex.lock()
-            self.is_running = True
-            self.reconnect_attempts = 0
-            self._stats["connection_attempts"] += 1
-            self._mutex.unlock()
+            with self._lock:
+                self.is_running = True
+                self.reconnect_attempts = 0
+                self._stats["connection_attempts"] += 1
 
             _log.debug(f"Starting Socket.IO broadcaster to {self.url} with path {self.socketio_path}")
             
-            # Use PyQt threading approach
             self._thread = Thread(target=self._run_loop, daemon=True, name="SocketIOBroadcaster")
             self._thread.start()
 
@@ -379,26 +376,20 @@ class SocketIOBroadcaster(QObject):
 
         except Exception as e:
             _log.debug(f"Failed to start Socket.IO broadcaster: {e}")
-            self._mutex.lock()
-            try:
+            with self._lock:
                 self.is_running = False
-            finally:
-                self._mutex.unlock()
             return False
 
     def stop(self) -> bool:
-        """Stop the Socket.IO client gracefully using PyQt threading"""
+        """Stop the Socket.IO client gracefully"""
         if not self.is_running:
             return True
 
         try:
             _log.debug("Requesting Socket.IO broadcaster to stop...")
 
-            self._mutex.lock()
-            try:
+            with self._lock:
                 self.is_running = False
-            finally:
-                self._mutex.unlock()
 
             # Signal shutdown
             if self._loop and self._loop.is_running() and self._shutdown_event:
@@ -414,17 +405,13 @@ class SocketIOBroadcaster(QObject):
                     _log.warning("Socket.IO thread did not stop within timeout")
 
             # Clean up
-            self._mutex.lock()
-            try:
-                self._is_connected = False
-                self.sio = None
-                self._connection_start_time = None
+            self._is_connected = False
+            self.sio = None
+            self._connection_start_time = None
 
-                # Update stats
-                if self._connection_start_time:
-                    self._stats["total_uptime"] += time.time() - self._connection_start_time
-            finally:
-                self._mutex.unlock()
+            # Update stats
+            if self._connection_start_time:
+                self._stats["total_uptime"] += time.time() - self._connection_start_time
 
             _log.debug("Stopped Socket.IO broadcaster")
             return True
@@ -512,11 +499,8 @@ class SocketIOBroadcaster(QObject):
                     self._emit_with_ack("message", {"data": message}), self._loop
                 )
 
-            self._mutex.lock()
-            try:
+            with self._lock:
                 self._stats["messages_sent"] += 1
-            finally:
-                self._mutex.unlock()
             return True
 
         except json.JSONDecodeError:
@@ -533,12 +517,9 @@ class SocketIOBroadcaster(QObject):
     def _emit_pending_signals(self) -> None:
         """Emit pending signals from the main thread"""
         try:
-            self._mutex.lock()
-            try:
+            with self._lock:
                 signals_to_emit = self._pending_signals.copy()
                 self._pending_signals.clear()
-            finally:
-                self._mutex.unlock()
 
             for signal_type, *args in signals_to_emit:
                 try:
@@ -561,11 +542,8 @@ class SocketIOBroadcaster(QObject):
 
     def _queue_signal(self, signal_type: str, *args) -> None:
         """Queue a signal to be emitted from the main thread"""
-        self._mutex.lock()
-        try:
+        with self._lock:
             self._pending_signals.append((signal_type, *args))
-        finally:
-            self._mutex.unlock()
 
     def _run_loop(self) -> None:
         """Run the asyncio event loop in a separate thread"""
@@ -588,6 +566,7 @@ class SocketIOBroadcaster(QObject):
                     task.cancel()
 
                 if tasks:
+
                     async def gather_tasks():
                         await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -611,14 +590,10 @@ class SocketIOBroadcaster(QObject):
             @self.sio.event
             async def connect():
                 _log.debug("Socket.IO connected successfully")
-                self._mutex.lock()
-                try:
-                    self._is_connected = True
-                    self._connection_start_time = time.time()
-                    self.reconnect_attempts = 0
-                    self._stats["successful_connections"] += 1
-                finally:
-                    self._mutex.unlock()
+                self._is_connected = True
+                self._connection_start_time = time.time()
+                self.reconnect_attempts = 0
+                self._stats["successful_connections"] += 1
                 
                 # Emit connection signal
                 self._queue_signal("connected")
@@ -635,14 +610,10 @@ class SocketIOBroadcaster(QObject):
             @self.sio.event
             async def disconnect():
                 _log.debug("Socket.IO disconnected")
-                self._mutex.lock()
-                try:
-                    self._is_connected = False
-                    if self._connection_start_time:
-                        self._stats["total_uptime"] += time.time() - self._connection_start_time
-                        self._connection_start_time = None
-                finally:
-                    self._mutex.unlock()
+                self._is_connected = False
+                if self._connection_start_time:
+                    self._stats["total_uptime"] += time.time() - self._connection_start_time
+                    self._connection_start_time = None
                 
                 # Emit disconnection signal
                 self._queue_signal("disconnected")
@@ -662,11 +633,7 @@ class SocketIOBroadcaster(QObject):
                 if isinstance(data, dict):
                     error_msg = str(data.get("message", data))
                     if "unauthorized" in error_msg.lower() or "401" in error_msg:
-                        self._mutex.lock()
-                        try:
-                            self._stats["auth_failures"] += 1
-                        finally:
-                            self._mutex.unlock()
+                        self._stats["auth_failures"] += 1
                         self._queue_signal("auth_failed", f"Authentication failed: {error_msg}")
                     else:
                         self._queue_signal("error", f"Connection error: {error_msg}")
@@ -706,11 +673,8 @@ class SocketIOBroadcaster(QObject):
 
             _log.debug(f"Received Socket.IO event: {event} with data: {data}")
 
-            self._mutex.lock()
-            try:
+            with self._lock:
                 self._stats["messages_received"] += 1
-            finally:
-                self._mutex.unlock()
 
             # Emit message signal
             self._queue_signal("message", message_data)
@@ -777,12 +741,8 @@ class SocketIOBroadcaster(QObject):
 
                         await self.sio.connect(self.url, **connect_kwargs)
 
-                        self._mutex.lock()
-                        try:
-                            self._stats["connection_refreshes"] += 1
-                            self._last_connection_refresh = time.time()
-                        finally:
-                            self._mutex.unlock()
+                        self._stats["connection_refreshes"] += 1
+                        self._last_connection_refresh = time.time()
                         _log.debug("Socket.IO connection refreshed successfully")
 
                     except Exception as e:
@@ -791,6 +751,7 @@ class SocketIOBroadcaster(QObject):
 
         except asyncio.CancelledError:
             _log.debug("Connection refresh loop cancelled")
+
 
     async def _attempt_token_refresh(self) -> None:
         """Attempt to refresh the JWT token"""
@@ -810,7 +771,7 @@ class SocketIOBroadcaster(QObject):
                     "timestamp": time.time()
                 })
 
-            # TODO: build out token refresh logic
+            # TODO: buld out token refresh logic
 
         except Exception as e:
             _log.debug(f"Failed to attempt token refresh: {e}")
@@ -818,18 +779,14 @@ class SocketIOBroadcaster(QObject):
 
     def _handle_connection_error(self, error_msg: str) -> None:
         """Handle connection errors and update state"""
-        self._mutex.lock()
-        try:
-            self._is_connected = False
-            self.sio = None
+        self._is_connected = False
+        self.sio = None
 
-            if self._connection_start_time:
-                self._stats["total_uptime"] += time.time() - self._connection_start_time
-                self._connection_start_time = None
+        if self._connection_start_time:
+            self._stats["total_uptime"] += time.time() - self._connection_start_time
+            self._connection_start_time = None
 
-            self.reconnect_attempts += 1
-        finally:
-            self._mutex.unlock()
+        self.reconnect_attempts += 1
 
         # Emit disconnection signal
         self._queue_signal("disconnected")
@@ -848,11 +805,7 @@ class SocketIOBroadcaster(QObject):
         ):
             _log.debug(f"Max reconnection attempts ({self.max_reconnect_attempts}) reached")
             self._queue_signal("error", f"Max reconnection attempts reached: {error_msg}")
-            self._mutex.lock()
-            try:
-                self.is_running = False
-            finally:
-                self._mutex.unlock()
+            self.is_running = False
         else:
             _log.debug(
                 f"Reconnection attempt {self.reconnect_attempts}/{self.max_reconnect_attempts}"

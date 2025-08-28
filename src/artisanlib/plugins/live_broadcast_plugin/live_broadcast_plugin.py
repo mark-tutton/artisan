@@ -4,7 +4,6 @@ import logging
 import time
 import traceback
 from typing import Dict, Any, Optional, List, Callable
-from threading import Thread
 from datetime import datetime
 from dataclasses import dataclass, field
 from enum import Enum
@@ -18,7 +17,6 @@ except ImportError:
     from PyQt5.QtWidgets import QMenu, QMainWindow, QMessageBox, QDialog, QAction
     from PyQt5.QtCore import QTimer, pyqtSignal, QObject
 
-
 # Import PluginBase and PluginState and LiveBroadcastConfig
 from ..base import PluginBase, PluginState
 from .config import LiveBroadcastConfig
@@ -30,24 +28,19 @@ except ImportError:
     SocketIOBroadcaster = None
     SOCKETIO_AVAILABLE = False
 
-
 _log = logging.getLogger(__name__)
-
 
 class BroadcastState(Enum):
     """Broadcast connection states"""
-
     DISCONNECTED = "disconnected"
     CONNECTING = "connecting"
     CONNECTED = "connected"
     ERROR = "error"
     RECONNECTING = "reconnecting"
 
-
 @dataclass
 class BroadcastMetrics:
     """Broadcast performance metrics"""
-
     messages_sent: int = 0
     messages_failed: int = 0
     bytes_sent: int = 0
@@ -59,17 +52,14 @@ class BroadcastMetrics:
     total_uptime: float = 0.0
     start_time: Optional[datetime] = None
 
-
 class LiveBroadcastSignals(QObject):
     """QObject to handle signals for the LiveBroadcastPlugin."""
-
     mark_event_signal = pyqtSignal(str, bool)
     toggle_monitoring_signal = pyqtSignal(bool)
     toggle_roasting_signal = pyqtSignal(bool)
     reset_roast_signal = pyqtSignal()
     broadcast_state_changed = pyqtSignal(str)  # new_state
     broadcast_error = pyqtSignal(str)  # error_message
-
 
 class LiveBroadcastPlugin(PluginBase):
     @property
@@ -131,117 +121,8 @@ class LiveBroadcastPlugin(PluginBase):
         # Headless mode detection
         self.headless_mode = False
 
-    def initialize(self, main_window: QMainWindow) -> bool:
-        """Required abstract method from PluginBase"""
-        try:
-            self._change_state(PluginState.INITIALIZING)
-            self.main_window = main_window
-
-   
-            # # Initialize broadcaster if auto-start is enabled
-            if self.config.auto_start:
-                self._initialize_broadcaster() # TODO: revist this
-
-                
-            # self._initialize_plugin() 
-         
-            
-
-            self._change_state(PluginState.ACTIVE)
-            self.initialization_time = datetime.now()
-            self.logger.info("Live Broadcast Plugin initialized successfully")
-            return True
-
-        except Exception as e:
-            self._change_state(PluginState.ERROR)
-            self._record_error("initialization", str(e))
-            self.logger.error(f"Failed to initialize plugin: {e}")
-            return False
-
-    def start(self) -> bool:
-        try:
-            if self.state != PluginState.ACTIVE:
-                self.logger.warning("Plugin not in active state, cannot start")
-                return False
-
-            if self.config.auto_start and not self.broadcaster:
-                self._initialize_broadcaster()
-
-            if self.broadcaster:
-                success = self.broadcaster.start()
-                if success:
-                    self.logger.info("Live Broadcast Plugin started successfully")
-                    return True
-                else:
-                    self.logger.error("Failed to start broadcaster")
-                    return False
-            else:
-                self.logger.info("Broadcaster not configured, plugin started in passive mode")
-                return True
-
-        except Exception as e:
-            self._record_error("start", str(e))
-            self.logger.error(f"Failed to start plugin: {e}")
-            return False
-
-    def stop(self) -> bool:
-        try:
-            if self.broadcaster:
-                self.broadcaster.stop()
-                self.logger.info("Live Broadcast Plugin stopped")
-
-            # Stop timers
-            if self.update_timer:
-                self.update_timer.stop()
-            if self.monitoring_timer:
-                self.monitoring_timer.stop()
-            if self.health_check_timer:
-                self.health_check_timer.stop()
-
-            return True
-
-        except Exception as e:
-            self._record_error("stop", str(e))
-            self.logger.error(f"Failed to stop plugin: {e}")
-            return False
-
-    def cleanup(self) -> bool:
-        try:
-            self._change_state(PluginState.CLEANING_UP)
-
-            # Stop operations
-            self.stop()
-
-            # Clean up broadcaster
-            if self.broadcaster:
-                self.broadcaster.stop()
-                self.broadcaster = None
-
-            # Disconnect signals
-            self._disconnect_signals()
-
-            self._change_state(PluginState.DISABLED)
-            self.logger.info("Live Broadcast Plugin cleaned up successfully")
-            return True
-
-        except Exception as e:
-            self._record_error("cleanup", str(e))
-            self.logger.error(f"Failed to cleanup plugin: {e}")
-            return False
-
-    def _disconnect_signals(self) -> None:
-        """Disconnect plugin signals"""
-        try:
-            if hasattr(self, "signals"):
-                self.signals.mark_event_signal.disconnect()
-                self.signals.toggle_monitoring_signal.disconnect()
-                self.signals.toggle_roasting_signal.disconnect()
-                self.signals.reset_roast_signal.disconnect()
-        except Exception as e:
-            self.logger.warning(f"Error disconnecting signals: {e}")
-
     def _initialize_plugin(self) -> None:
-        """Initialize the plugin"""
+        """Initialize the plugin using the base class threading system"""
         try:
             # Check headless mode
             self.headless_mode = getattr(self.config, "headless_mode", False)
@@ -270,7 +151,8 @@ class LiveBroadcastPlugin(PluginBase):
             # Start broadcaster if auto-start is enabled
             if self.config.auto_start:
                 self.logger.info("Auto-start enabled, starting broadcaster...")
-                self._start_broadcaster()
+                # Use worker thread for broadcaster initialization
+                self.execute_in_worker("initialize_broadcaster", self._start_broadcaster_worker)
             else:
                 self.logger.info("Auto-start disabled, broadcaster not started")
 
@@ -278,21 +160,152 @@ class LiveBroadcastPlugin(PluginBase):
             self._record_error("InitializationError", str(e))
             raise
 
-    def _initialize_broadcaster(self) -> None:
-        """Initialize the WebSocket broadcaster"""
+    def _start_broadcaster_worker(self) -> bool:
+        """Worker thread method for starting broadcaster"""
         try:
             if SOCKETIO_AVAILABLE and not self.broadcaster:
                 self.broadcaster = SocketIOBroadcaster(
                     host=self.config.server_host,
                     port=self.config.server_port,
-                    config=self.config
+                    path=self.config.socketio_path,  # Use Socket.IO path
+                    secure=self.config.use_ssl,  # Enable SSL/WSS
+                    auth_token=self.config.auth_token,  # JWT authentication
+                    reconnect_interval=self.config.reconnect_interval,
+                    max_reconnect_attempts=self.config.max_reconnect_attempts,
+                    connection_timeout=self.config.connection_timeout,
+                    ping_interval=self.config.heartbeat_interval,
+                    connection_refresh_interval=self.config.connection_refresh_interval,
                 )
-                self.logger.info("SocketIO broadcaster initialized")
+                self.logger.info("SocketIO broadcaster initialized in worker thread")
+                
+                # Start the broadcaster
+                if self.broadcaster:
+                    success = self.broadcaster.start()
+                    if success:
+                        self.logger.info("Broadcaster started successfully in worker thread")
+                        return True
+                    else:
+                        self.logger.error("Failed to start broadcaster in worker thread")
+                        return False
             elif not SOCKETIO_AVAILABLE:
                 self.logger.warning("SocketIO not available, broadcaster disabled")
+                return False
+                
         except Exception as e:
-            self.logger.error(f"Failed to initialize broadcaster: {e}")
+            self.logger.error(f"Failed to initialize broadcaster in worker thread: {e}")
+            return False
+        
+        return False
 
+    def start(self) -> bool:
+        """Start the plugin using worker threads for heavy operations"""
+        try:
+            if self.state != PluginState.ACTIVE:
+                self.logger.warning("Plugin not in active state, cannot start")
+                return False
+
+            if self.config.auto_start and not self.broadcaster:
+                # Use worker thread for broadcaster initialization
+                return self.execute_in_worker("start_broadcaster", self._start_broadcaster_worker)
+
+            if self.broadcaster:
+                # Use worker thread for starting broadcaster
+                return self.execute_in_worker("start_broadcaster_connection", self._start_broadcaster_connection_worker)
+            else:
+                self.logger.info("Broadcaster not configured, plugin started in passive mode")
+                return True
+
+        except Exception as e:
+            self._record_error("start", str(e))
+            self.logger.error(f"Failed to start plugin: {e}")
+            return False
+
+    def _start_broadcaster_connection_worker(self) -> bool:
+        """Worker thread method for starting broadcaster connection"""
+        try:
+            if self.broadcaster:
+                success = self.broadcaster.start()
+                if success:
+                    self.logger.info("Broadcaster connection started successfully in worker thread")
+                    return True
+                else:
+                    self.logger.error("Failed to start broadcaster connection in worker thread")
+                    return False
+            return False
+        except Exception as e:
+            self.logger.error(f"Error starting broadcaster connection in worker thread: {e}")
+            return False
+
+    def stop(self) -> bool:
+        """Stop the plugin using worker threads for cleanup operations"""
+        try:
+            # Use worker thread for stopping operations
+            return self.execute_in_worker("stop_plugin", self._stop_plugin_worker)
+        except Exception as e:
+            self._record_error("stop", str(e))
+            self.logger.error(f"Failed to stop plugin: {e}")
+            return False
+
+    def _stop_plugin_worker(self) -> bool:
+        """Worker thread method for stopping plugin"""
+        try:
+            if self.broadcaster:
+                self.broadcaster.stop()
+                self.logger.info("Live Broadcast Plugin stopped in worker thread")
+
+            # Stop timers
+            if self.update_timer:
+                self.update_timer.stop()
+            if self.monitoring_timer:
+                self.monitoring_timer.stop()
+            if self.health_check_timer:
+                self.health_check_timer.stop()
+
+            return True
+        except Exception as e:
+            self.logger.error(f"Error stopping plugin in worker thread: {e}")
+            return False
+
+    def _cleanup_plugin(self) -> None:
+        """Cleanup the plugin using the base class threading system"""
+        try:
+            # Stop operations
+            self.stop()
+
+            # Clean up broadcaster
+            if self.broadcaster:
+                # Use worker thread for broadcaster cleanup
+                self.execute_in_worker("cleanup_broadcaster", self._cleanup_broadcaster_worker)
+
+            # Disconnect signals
+            self._disconnect_signals()
+
+            self.logger.info("Live Broadcast Plugin cleaned up successfully")
+
+        except Exception as e:
+            self._record_error("cleanup", str(e))
+            self.logger.error(f"Failed to cleanup plugin: {e}")
+
+    def _cleanup_broadcaster_worker(self) -> None:
+        """Worker thread method for cleaning up broadcaster"""
+        try:
+            if self.broadcaster:
+                self.broadcaster.stop()
+                self.broadcaster = None
+                self.logger.info("Broadcaster cleaned up in worker thread")
+        except Exception as e:
+            self.logger.error(f"Error cleaning up broadcaster in worker thread: {e}")
+
+    def _disconnect_signals(self) -> None:
+        """Disconnect plugin signals"""
+        try:
+            if hasattr(self, "signals"):
+                self.signals.mark_event_signal.disconnect()
+                self.signals.toggle_monitoring_signal.disconnect()
+                self.signals.toggle_roasting_signal.disconnect()
+                self.signals.reset_roast_signal.disconnect()
+        except Exception as e:
+            self.logger.warning(f"Error disconnecting signals: {e}")
 
     def _setup_main_window_connections(self) -> None:
         """Setup connections to main window signals"""
@@ -545,7 +558,7 @@ class LiveBroadcastPlugin(PluginBase):
             config_action.triggered.connect(self._configure)
             menu.addAction(config_action)
 
-            # Status
+            # Status // FIXME: this does not seem to be in sync with the actual status
             status_action = QAction("Show Status", menu)
             status_action.triggered.connect(self._show_status)
             menu.addAction(status_action)
@@ -804,7 +817,6 @@ class LiveBroadcastPlugin(PluginBase):
                 self.logger.debug(f"🔓 Restored monitoring for {method_name}")
         except Exception as e:
             self.logger.warning(f"⚠️ Failed to restore method monitoring for {method_name}: {e}")
-
 
 
     def _on_charge_event(self, noaction: bool = False) -> None:
@@ -1301,7 +1313,7 @@ class LiveBroadcastPlugin(PluginBase):
             try:
                 monitoring_state["connection_status"] = {
                     "phidget_devices_connected": getattr(qmc, "phidget_devices_connected", 0),
-                    "non_serial_devices_connected": getattr(qmc, "non_serial_devices_connected", 0),
+                    "non_serial_devices_connected": getattr(qmc, "phidget_devices_connected", 0),
                     "non_temp_devices_connected": getattr(qmc, "non_temp_devices_connected", 0),
                     "special_devices_connected": getattr(qmc, "special_devices_connected", 0),
                     "binary_devices_connected": getattr(qmc, "binary_devices_connected", 0),
@@ -1452,38 +1464,6 @@ class LiveBroadcastPlugin(PluginBase):
             if data is None:
                 data = self._get_current_roast_data()
             self._broadcast_roast_data_impl(data)
-
-    def _broadcast_roast_data_impl(self, data: Dict[str, Any]) -> None:
-        """Implementation of roast data broadcasting"""
-        try:
-            if not self.broadcaster or not self.broadcaster.is_running:
-                self.logger.warning(
-                    "❌ Cannot broadcast - broadcaster not available or not running"
-                )
-                return
-
-            message = json.dumps(data)
-            self.logger.info(f"📤 Broadcasting message: {message[:100]}...")
-
-            self.broadcaster.broadcast(message)
-
-            # Update metrics
-            self.metrics.messages_sent += 1
-            self.metrics.bytes_sent += len(message.encode("utf-8"))
-            self.metrics.last_send_time = datetime.now()
-
-            self.logger.info(
-                f"✅ Message broadcast successful. Total sent: {self.metrics.messages_sent}"
-            )
-
-        except Exception as e:
-            self._record_error("BroadcastDataError", str(e))
-            self.metrics.messages_failed += 1
-            self.consecutive_failures += 1
-            self.logger.error(f"❌ Broadcast failed: {e}")
-            import traceback
-
-            self.logger.error(f"Traceback: {traceback.format_exc()}")
 
     def _broadcast_roast_data_impl(self, data: Dict[str, Any]) -> None:
         """Implementation of roast data broadcasting"""
@@ -1678,14 +1658,6 @@ class LiveBroadcastPlugin(PluginBase):
 
             self._change_broadcast_state(BroadcastState.CONNECTING)
 
-            # self.broadcaster = WebSocketBroadcaster(
-            #     host=self.config.server_host,
-            #     port=self.config.server_port,
-            #     path=self.config.server_path,
-            #     reconnect_interval=self.config.reconnect_interval,
-            #     max_reconnect_attempts=self.config.max_reconnect_attempts,
-            # )
-
             self.broadcaster = SocketIOBroadcaster(
                 host=self.config.server_host,
                 port=self.config.server_port,
@@ -1739,14 +1711,6 @@ class LiveBroadcastPlugin(PluginBase):
             self.consecutive_failures = 0
             self.logger.info("Connected to broadcast server")
 
-            # # Send notification if not in headless mode
-            # if not self.headless_mode and hasattr(self.main_window, "sendNotificationMessage"):
-            #     self.main_window.sendNotificationMessage(
-            #         "Live Broadcast",
-            #         "Connected to broadcast server",
-            #         NotificationType.ARTISAN_SYSTEM,
-            #     )
-
         except Exception as e:
             self._record_error("ConnectionHandlerError", str(e))
 
@@ -1755,14 +1719,6 @@ class LiveBroadcastPlugin(PluginBase):
         try:
             self._change_broadcast_state(BroadcastState.DISCONNECTED)
             self.logger.info("Disconnected from broadcast server")
-
-            # # Send notification if not in headless mode
-            # if not self.headless_mode and hasattr(self.main_window, "sendNotificationMessage"):
-            #     self.main_window.sendNotificationMessage(
-            #         "Live Broadcast",
-            #         "Disconnected from broadcast server",
-            #         NotificationType.ARTISAN_SYSTEM,
-            #     )
 
         except Exception as e:
             self._record_error("DisconnectionHandlerError", str(e))
@@ -1793,6 +1749,7 @@ class LiveBroadcastPlugin(PluginBase):
         except Exception as e:
             self._record_error("ConfigurationError", str(e))
 
+    # FIXME: this does not seem to be in sync with the actual status
     def _show_status(self) -> None:
         """Show status with headless mode support"""
         if self.headless_mode:
@@ -1987,7 +1944,7 @@ class LiveBroadcastPlugin(PluginBase):
         except Exception as e:
             self._record_error("RoastDataMessageHandlerError", str(e))
 
-    # ## this is correctly destructuing the event from the data but not marking on the canvas
+
     def _handle_roast_event(self, data: Dict[str, Any]) -> None:
         """Handle roast event messages"""
         try:
@@ -2248,63 +2205,8 @@ class LiveBroadcastPlugin(PluginBase):
         except Exception as e:
             self._record_error("RecoveryError", str(e))
 
-    def _cleanup_plugin(self) -> None:
-        """Cleanup the plugin"""
-        try:
-            self.logger.info(f"Cleaning up {self.name}")
-
-            # Stop timers
-            if self.update_timer:
-                self.update_timer.stop()
-                self.update_timer.deleteLater()
-                self.update_timer = None
-
-            if self.monitoring_timer:
-                self.monitoring_timer.stop()
-                self.monitoring_timer.deleteLater()
-                self.monitoring_timer = None
-
-            if self.health_check_timer:
-                self.health_check_timer.stop()
-                self.health_check_timer.deleteLater()
-                self.health_check_timer = None
-
-            # Stop broadcaster
-            if self.broadcaster:
-                self.broadcaster.stop()
-                self.broadcaster = None
-
-            # Disconnect signals
-            if hasattr(self, "signals"):
-                try:
-                    self.signals.mark_event_signal.disconnect()
-                    self.signals.toggle_monitoring_signal.disconnect()
-                    self.signals.toggle_roasting_signal.disconnect()
-                    self.signals.reset_roast_signal.disconnect()
-
-                    self.roast_events_signals.mark_charge_signal.disconnect()
-                    self.roast_events_signals.mark_dry_end_signal.disconnect()
-                    self.roast_events_signals.mark_fc_start_signal.disconnect()
-                    self.roast_events_signals.mark_fc_end_signal.disconnect()
-                    self.roast_events_signals.mark_sc_start_signal.disconnect()
-                    self.roast_events_signals.mark_sc_end_signal.disconnect()
-                    self.roast_events_signals.mark_drop_signal.disconnect()
-                    self.roast_events_signals.mark_cool_end_signal.disconnect()
-                except Exception as e:
-                    self.logger.warning(f"Error disconnecting signals: {e}")
-
-            # Update final metrics
-            if self.metrics.start_time:
-                self.metrics.total_uptime += (
-                    datetime.now() - self.metrics.start_time
-                ).total_seconds()
-
-            self.logger.info(f"Cleanup completed for {self.name}")
-
-        except Exception as e:
-            self._record_error("CleanupError", str(e))
-
     def get_plugin_status(self) -> Dict[str, Any]:
+        """Get comprehensive plugin status including broadcast-specific information"""
         try:
             base_status = super().get_health_status()
 
@@ -2312,7 +2214,6 @@ class LiveBroadcastPlugin(PluginBase):
             broadcast_status = {
                 "broadcast_state": self.broadcast_state.value,
                 "headless_mode": self.headless_mode,
-                # "websockets_available": WEBSOCKETS_AVAILABLE,
                 "socketio_available": SOCKETIO_AVAILABLE,
                 "broadcaster_running": self.broadcaster.is_running if self.broadcaster else False,
                 "metrics": {

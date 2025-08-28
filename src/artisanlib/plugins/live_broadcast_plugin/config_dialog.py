@@ -22,7 +22,7 @@ try:
         QTextEdit,
         QProgressBar,
     )
-    from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+    from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread, QMutex
     from PyQt6.QtGui import QFont, QIcon
 except ImportError:
     from PyQt5.QtWidgets import (
@@ -63,9 +63,14 @@ class LiveBroadcastConfigDialog(QDialog):
         self.original_config = config.to_dict()
         self.test_in_progress = False
 
+        self._config_mutex = QMutex()
+
         self.setup_ui()
         self.load_config()
         self.setup_validation()
+
+        # Connect test result signal
+        self.config_tested.connect(self._handle_test_result)
 
         _log.info("Configuration dialog initialized")
 
@@ -128,7 +133,7 @@ class LiveBroadcastConfigDialog(QDialog):
             self.port_spin = QSpinBox()
             self.port_spin.setRange(1, 65535)
             # self.port_spin.setValue(3001)
-            self.port_spin.setValue(5001)
+            self.port_spin.setValue(5100)
             self.port_spin.setToolTip("Socket.IO server port")
             server_layout.addRow("Port:", self.port_spin)
 
@@ -522,20 +527,6 @@ class LiveBroadcastConfigDialog(QDialog):
         except Exception as e:
             _log.error(f"Error setting up validation: {e}")
 
-    # def toggle_token_visibility(self, checked: bool):
-    #     """Toggle JWT token visibility"""
-    #     try:
-    #         if checked:
-    #             self.auth_token_edit.setEchoMode(QLineEdit.Normal)
-    #             self.show_token_button.setText("🙈 Hide")
-    #             self.show_token_button.setToolTip("Hide JWT token")
-    #         else:
-    #             self.auth_token_edit.setEchoMode(QLineEdit.Password)
-    #             self.show_token_button.setText("👁 Show")
-    #             self.show_token_button.setToolTip("Show JWT token")
-    #     except Exception as e:
-    #         _log.error(f"Error toggling token visibility: {e}")
-
     def toggle_token_visibility(self, checked: bool):
         """Toggle JWT token visibility"""
         try:
@@ -547,7 +538,7 @@ class LiveBroadcastConfigDialog(QDialog):
                 except AttributeError:
                     # PyQt5
                     self.auth_token_edit.setEchoMode(QLineEdit.EchoMode.Normal)
-                
+
                 self.show_token_button.setText("Hide")
                 self.show_token_button.setToolTip("Hide JWT token")
             else:
@@ -558,7 +549,7 @@ class LiveBroadcastConfigDialog(QDialog):
                 except AttributeError:
                     # PyQt5
                     self.auth_token_edit.setEchoMode(QLineEdit.EchoMode.Password)
-                
+
                 self.show_token_button.setText("Show")
                 self.show_token_button.setToolTip("Show JWT token")
         except Exception as e:
@@ -566,6 +557,7 @@ class LiveBroadcastConfigDialog(QDialog):
 
     def load_config(self):
         """Load configuration into UI with error handling"""
+        self._config_mutex.lock()
         try:
             # Server settings
             self.host_edit.setText(self.config.server_host)
@@ -621,13 +613,16 @@ class LiveBroadcastConfigDialog(QDialog):
             self.update_config_info()
 
             _log.debug("Configuration loaded into UI")
-
+            pass
         except Exception as e:
             _log.error(f"Error loading configuration: {e}")
             self.show_error("Load Error", f"Failed to load configuration: {e}")
+        finally:
+            self._config_mutex.unlock()
 
     def save_config(self):
         """Save UI configuration with validation"""
+        self._config_mutex.lock()
         try:
             # Validate before saving
             if not self.validate_all():
@@ -685,10 +680,14 @@ class LiveBroadcastConfigDialog(QDialog):
             }
 
             _log.debug("Configuration saved from UI")
+            pass
 
         except Exception as e:
             _log.error(f"Error saving configuration: {e}")
             raise
+
+        finally:
+            self._config_mutex.unlock()
 
     def validate_config(self):
         """Validate configuration values"""
@@ -865,12 +864,83 @@ class LiveBroadcastConfigDialog(QDialog):
                 return
 
             # Start test in background
-            QTimer.singleShot(100, lambda: self._perform_connection_test(host, port, path))
+            # QTimer.singleShot(100, lambda: self._perform_connection_test(host, port, path))
+            self._start_connection_test(host, port, path)
 
         except Exception as e:
             _log.error(f"Error starting connection test: {e}")
             self.show_error("Test Error", f"Failed to start connection test: {e}")
             self._reset_test_ui()
+
+    def _start_connection_test(self, host: str, port: int, path: str):
+        """Start connection test using QThread"""
+        try:
+            from .websocket_client import SocketIOBroadcaster
+            import asyncio
+
+            class ConnectionTestWorker(QObject):
+                test_completed = pyqtSignal(bool, str)
+
+                def __init__(self, host, port, path):
+                    super().__init__()
+                    self.host = host
+                    self.port = port
+                    self.path = path
+
+                def run_test(self):
+                    try:
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+
+                        async def test():
+                            try:
+                                test_broadcaster = SocketIOBroadcaster(
+                                    self.host, self.port, self.path
+                                )
+                                test_broadcaster.start()
+
+                                # Wait for connection
+                                await asyncio.sleep(2)
+
+                                if test_broadcaster.is_connected():
+                                    test_broadcaster.stop()
+                                    return True, "Connection successful"
+                                else:
+                                    test_broadcaster.stop()
+                                    return False, "Connection failed - no response from server"
+
+                            except Exception as e:
+                                return False, f"Connection failed: {str(e)}"
+
+                        result, message = loop.run_until_complete(test())
+                        loop.close()
+
+                        # Emit result signal
+                        self.test_completed.emit(result, message)
+
+                    except Exception as e:
+                        self.test_completed.emit(False, f"Test error: {str(e)}")
+
+            # Create worker and thread
+            self.test_worker = ConnectionTestWorker(host, port, path)
+            self.test_thread = QThread()
+
+            # Move worker to thread
+            self.test_worker.moveToThread(self.test_thread)
+
+            # Connect signals
+            self.test_thread.started.connect(self.test_worker.run_test)
+            self.test_worker.test_completed.connect(self._handle_test_result)
+            self.test_worker.test_completed.connect(self.test_thread.quit)
+            self.test_worker.test_completed.connect(self.test_worker.deleteLater)
+            self.test_thread.finished.connect(self.test_thread.deleteLater)
+
+            # Start thread
+            self.test_thread.start()
+
+        except Exception as e:
+            _log.error(f"Error setting up connection test: {e}")
+            self.config_tested.emit(False, f"Test setup error: {str(e)}")
 
     def _perform_connection_test(self, host: str, port: int, path: str):
         """Perform the actual connection test"""
@@ -1048,7 +1118,7 @@ class LiveBroadcastConfigDialog(QDialog):
             super().reject()
 
     def closeEvent(self, event):
-        """Handle dialog close event"""
+        """Handle dialog close event with thread cleanup"""
         try:
             if self.test_in_progress:
                 reply = QMessageBox.question(
@@ -1059,6 +1129,11 @@ class LiveBroadcastConfigDialog(QDialog):
                 )
 
                 if reply == QMessageBox.StandardButton.Yes:
+                    # Clean up test thread if running
+                    if hasattr(self, "test_thread") and self.test_thread.isRunning():
+                        self.test_thread.quit()
+                        self.test_thread.wait(1000)  # Wait up to 1 second
+
                     self._reset_test_ui()
                     event.accept()
                 else:
@@ -1068,4 +1143,4 @@ class LiveBroadcastConfigDialog(QDialog):
 
         except Exception as e:
             _log.error(f"Error handling close event: {e}")
-            event.acce
+            event.accept()
