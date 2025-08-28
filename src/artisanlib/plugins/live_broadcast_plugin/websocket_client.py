@@ -858,6 +858,66 @@ class SocketIOBroadcaster(QObject):
                 f"Reconnection attempt {self.reconnect_attempts}/{self.max_reconnect_attempts}"
             )
 
+# rooms
+    def join_room(self, room_name: str):
+        """Join a specific room"""
+        if self.socket and self.socket.connected:
+            self.socket.emit('join_' + room_name.lower().replace(' ', '_'))
+            self.logger.info(f"Joining room: {room_name}")
+    
+    def leave_room(self, room_name: str):
+        """Leave a specific room"""
+        if self.socket and self.socket.connected:
+            self.socket.emit('leave_' + room_name.lower().replace(' ', '_'))
+            self.logger.info(f"Leaving room: {room_name}")
+    
+    def get_room_info(self):
+        """Get current room information"""
+        if self.socket and self.socket.connected:
+            self.socket.emit('get_room_info')
+    
+    def setup_room_handlers(self):
+        """Set up room-related event handlers"""
+        if not self.socket:
+            return
+            
+        # Room join/leave confirmations
+        self.socket.on('room_joined', self._on_room_joined)
+        self.socket.on('room_left', self._on_room_left)
+        self.socket.on('room_info', self._on_room_info)
+        self.socket.on('room_member_joined', self._on_room_member_joined)
+        self.socket.on('room_member_left', self._on_room_member_left)
+    
+    def _on_room_joined(self, data):
+        """Handle room join confirmation"""
+        self.logger.info(f"Joined room: {data.get('room')}")
+        if hasattr(self, 'on_room_joined'):
+            self.on_room_joined(data)
+    
+    def _on_room_left(self, data):
+        """Handle room leave confirmation"""
+        self.logger.info(f"Left room: {data.get('room')}")
+        if hasattr(self, 'on_room_left'):
+            self.on_room_left(data)
+    
+    def _on_room_info(self, data):
+        """Handle room information response"""
+        self.logger.info(f"Room info: {data}")
+        if hasattr(self, 'on_room_info'):
+            self.on_room_info(data)
+    
+    def _on_room_member_joined(self, data):
+        """Handle room member joined notification"""
+        self.logger.info(f"Member joined room {data.get('room')}: {data.get('username')}")
+        if hasattr(self, 'on_room_member_joined'):
+            self.on_room_member_joined(data)
+    
+    def _on_room_member_left(self, data):
+        """Handle room member left notification"""
+        self.logger.info(f"Member left room {data.get('room')}: {data.get('username')}")
+        if hasattr(self, 'on_room_member_left'):
+            self.on_room_member_left(data)
+
 # Check if socketio is available and log a warning if not
 if not SOCKETIO_AVAILABLE:
     _log.warning(

@@ -61,6 +61,14 @@ class LiveBroadcastSignals(QObject):
     broadcast_state_changed = pyqtSignal(str)  # new_state
     broadcast_error = pyqtSignal(str)  # error_message
 
+    # Room management signals
+    room_joined = pyqtSignal(str)  # room_name
+    room_left = pyqtSignal(str)    # room_name
+    room_info_updated = pyqtSignal(dict)  # room_info_data
+    room_member_joined = pyqtSignal(dict)  # member_data
+    room_member_left = pyqtSignal(dict)    # member_data
+    room_message = pyqtSignal(dict)        # message_data
+
 class LiveBroadcastPlugin(PluginBase):
     @property
     def name(self) -> str:
@@ -120,6 +128,16 @@ class LiveBroadcastPlugin(PluginBase):
 
         # Headless mode detection
         self.headless_mode = False
+
+        # Room management
+        self.current_rooms = set()
+        self.room_handlers = {}
+        self.room_config = {
+            'monitoring': True,      # Join monitoring room by default
+            'roastData': True,       # Join roast data room by default
+            'roastControl': False,   # Don't join control room by default
+            'artisan': True          # Join artisan room by default
+        }
 
     def _initialize_plugin(self) -> None:
         """Initialize the plugin using the base class threading system"""
@@ -552,6 +570,36 @@ class LiveBroadcastPlugin(PluginBase):
             menu.addAction(self.stop_action)
 
             menu.addSeparator()
+
+            # Room management submenu
+            room_menu = QMenu("Room Management", menu)
+            
+            # Room join/leave actions
+            for room_name in ['monitoring', 'roastData', 'roastControl', 'artisan']:
+                room_action = QAction(f"Toggle {room_name.title()}", room_menu)
+                room_action.setCheckable(True)
+                room_action.setChecked(self.room_config.get(room_name, False))
+                
+                # Create closure to capture room_name
+                def create_room_toggle(room):
+                    def toggle_room():
+                        if self.room_config.get(room, False):
+                            self.leave_room(room)
+                        else:
+                            self.join_room(room)
+                    return toggle_room
+                
+                room_action.triggered.connect(create_room_toggle(room_name))
+                room_menu.addAction(room_action)
+            
+            room_menu.addSeparator()
+            
+            # Room info action
+            room_info_action = QAction("Show Room Info", room_menu)
+            room_info_action.triggered.connect(self.get_room_info)
+            room_menu.addAction(room_info_action)
+            
+            menu.addMenu(room_menu)
 
             # Configuration
             config_action = QAction("Configure", menu)
@@ -1711,6 +1759,14 @@ class LiveBroadcastPlugin(PluginBase):
             self.consecutive_failures = 0
             self.logger.info("Connected to broadcast server")
 
+              
+            # Set up room handlers after connection
+            self._setup_room_handlers()
+            
+            # Join default rooms
+            self._join_default_rooms()
+            
+
         except Exception as e:
             self._record_error("ConnectionHandlerError", str(e))
 
@@ -2216,6 +2272,11 @@ class LiveBroadcastPlugin(PluginBase):
                 "headless_mode": self.headless_mode,
                 "socketio_available": SOCKETIO_AVAILABLE,
                 "broadcaster_running": self.broadcaster.is_running if self.broadcaster else False,
+                "rooms": {
+                    "current_rooms": list(self.current_rooms),
+                    "room_config": self.room_config,
+                    "total_rooms": len(self.current_rooms)
+                },
                 "metrics": {
                     "messages_sent": self.metrics.messages_sent,
                     "messages_failed": self.metrics.messages_failed,
@@ -2250,6 +2311,237 @@ class LiveBroadcastPlugin(PluginBase):
         except Exception as e:
             self._record_error("StatusError", str(e)) 
             return {"error": str(e)}
+
+#rooms
+    def _setup_room_handlers(self):
+        """Set up room-related event handlers"""
+        try:
+            if not self.broadcaster:
+                return
+            self.logger.info("Room handlers will be processed through message system")
+            
+        except Exception as e:
+            self._record_error("RoomHandlerSetupError", str(e))
+
+    def join_room(self, room_name: str) -> bool:
+        """Join a specific room"""
+        try:
+            if not self.broadcaster or not self.broadcaster.is_connected():
+                self.logger.warning(f"Cannot join room {room_name} - not connected")
+                return False
+                
+            room_events = {
+                'monitoring': 'join_monitoring',
+                'roastData': 'join_roast_data', 
+                'roastControl': 'join_roast_control',
+                'artisan': 'join_artisan'
+            }
+            
+            if room_name in room_events:
+                event = room_events[room_name]
+                if hasattr(self.broadcaster, 'broadcast'):
+                    room_message = {
+                        "type": "room_join",
+                        "room": room_name,
+                        "event": event,
+                        "timestamp": time.time()
+                    }
+                    self.broadcaster.broadcast(json.dumps(room_message))
+                    self.logger.info(f"Joining room: {room_name}")
+                    return True
+                else:
+                    self.logger.warning(f"Cannot join room {room_name} - no broadcast method")
+                    return False
+            else:
+                self.logger.warning(f"Unknown room: {room_name}")
+                return False
+                
+        except Exception as e:
+            self._record_error("JoinRoomError", str(e), {"room_name": room_name})
+            return False
+
+    def leave_room(self, room_name: str) -> bool:
+        """Leave a specific room"""
+        try:
+            if not self.broadcaster or not self.broadcaster.is_connected():
+                self.logger.warning(f"Cannot leave room {room_name} - not connected")
+                return False
+                
+            room_events = {
+                'monitoring': 'leave_monitoring',
+                'roastData': 'leave_roast_data',
+                'roastControl': 'leave_roast_control', 
+                'artisan': 'leave_artisan'
+            }
+            
+            if room_name in room_events:
+                event = room_events[room_name]
+                if hasattr(self.broadcaster, 'broadcast'):
+                    room_message = {
+                        "type": "room_leave",
+                        "room": room_name,
+                        "event": event,
+                        "timestamp": time.time()
+                    }
+                    self.broadcaster.broadcast(json.dumps(room_message))
+                    self.logger.info(f"Leaving room: {room_name}")
+                    return True
+                else:
+                    self.logger.warning(f"Cannot leave room {room_name} - no broadcast method")
+                    return False
+            else:
+                self.logger.warning(f"Unknown room: {room_name}")
+                return False
+                
+        except Exception as e:
+            self._record_error("LeaveRoomError", str(e), {"room_name": room_name})
+            return False
+
+    def get_room_info(self) -> bool:
+        """Get current room information"""
+        try:
+            if not self.broadcaster or not self.broadcaster.is_connected():
+                self.logger.warning("Cannot get room info - not connected")
+                return False
+                
+            if hasattr(self.broadcaster, 'broadcast'):
+                room_message = {
+                    "type": "room_info_request",
+                    "timestamp": time.time()
+                }
+                self.broadcaster.broadcast(json.dumps(room_message))
+                self.logger.info("Requested room information")
+                return True
+            else:
+                self.logger.warning("Cannot get room info - no broadcast method")
+                return False
+                
+        except Exception as e:
+            self._record_error("GetRoomInfoError", str(e))
+            return False
+
+
+    
+
+    def _on_room_joined(self, data: Dict[str, Any]) -> None:
+        """Handle room join confirmation"""
+        try:
+            room_name = data.get('room')
+            if room_name:
+                self.current_rooms.add(room_name)
+                self.logger.info(f"✅ Joined room: {room_name}")
+                
+                # Update room config
+                if room_name in self.room_config:
+                    self.room_config[room_name] = True
+                    
+                # Emit signal for UI updates
+                if hasattr(self.signals, 'room_joined'):
+                    self.signals.room_joined.emit(room_name)
+                    
+        except Exception as e:
+            self._record_error("RoomJoinedHandlerError", str(e))
+
+    def _on_room_left(self, data: Dict[str, Any]) -> None:
+        """Handle room leave confirmation"""
+        try:
+            room_name = data.get('room')
+            if room_name:
+                self.current_rooms.discard(room_name)
+                self.logger.info(f"🔴 Left room: {room_name}")
+                
+                # Update room config
+                if room_name in self.room_config:
+                    self.room_config[room_name] = False
+                    
+                # Emit signal for UI updates
+                if hasattr(self.signals, 'room_left'):
+                    self.signals.room_left.emit(room_name)
+                    
+        except Exception as e:
+            self._record_error("RoomLeftHandlerError", str(e))
+
+    def _on_room_info(self, data: Dict[str, Any]) -> None:
+        """Handle room information response"""
+        try:
+            self.logger.info(f"�� Room info received: {data}")
+            
+            # Update current rooms
+            current_rooms = data.get('currentRooms', [])
+            self.current_rooms = set(current_rooms)
+            
+            # Update room stats
+            room_stats = data.get('roomStats', {})
+            self.logger.info(f"Room statistics: {room_stats}")
+            
+            # Emit signal for UI updates
+            if hasattr(self.signals, 'room_info_updated'):
+                self.signals.room_info_updated.emit(data)
+                
+        except Exception as e:
+            self._record_error("RoomInfoHandlerError", str(e))
+
+    def _on_room_member_joined(self, data: Dict[str, Any]) -> None:
+        """Handle room member joined notification"""
+        try:
+            room_name = data.get('room')
+            username = data.get('username', 'Unknown')
+            client_id = data.get('clientId', 'Unknown')
+            
+            self.logger.info(f"👤 {username} joined room {room_name} (ID: {client_id})")
+            
+            # Emit signal for UI updates
+            if hasattr(self.signals, 'room_member_joined'):
+                self.signals.room_member_joined.emit(data)
+                
+        except Exception as e:
+            self._record_error("RoomMemberJoinedHandlerError", str(e))
+
+    def _on_room_member_left(self, data: Dict[str, Any]) -> None:
+        """Handle room member left notification"""
+        try:
+            room_name = data.get('room')
+            username = data.get('username', 'Unknown')
+            client_id = data.get('clientId', 'Unknown')
+            
+            self.logger.info(f"👋 {username} left room {room_name} (ID: {client_id})")
+            
+            # Emit signal for UI updates
+            if hasattr(self.signals, 'room_member_left'):
+                self.signals.room_member_left.emit(data)
+                
+        except Exception as e:
+            self._record_error("RoomMemberLeftHandlerError", str(e))
+
+    def _on_room_message(self, data: Dict[str, Any]) -> None:
+        """Handle room-specific messages"""
+        try:
+            room_name = data.get('room')
+            message = data.get('message', '')
+            
+            self.logger.info(f"💬 Room message from {room_name}: {message}")
+            
+            # Emit signal for UI updates
+            if hasattr(self.signals, 'room_message'):
+                self.signals.room_message.emit(data)
+                
+        except Exception as e:
+            self._record_error("RoomMessageHandlerError", str(e))
+
+    def _join_default_rooms(self):
+        """Join default rooms based on configuration"""
+        try:
+            if not self.broadcaster or not self.broadcaster.is_connected():
+                return
+                
+            self.logger.info("Joining default rooms...")
+            
+            for room_name, should_join in self.room_config.items():
+                if should_join:
+                    self.join_room(room_name)
+                    
+        except Exception as e:
+            self._record_error("JoinDefaultRoomsError", str(e))
 
 
 ArtisanPlugin = LiveBroadcastPlugin
