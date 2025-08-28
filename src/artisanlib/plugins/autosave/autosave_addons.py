@@ -322,18 +322,31 @@ def create_server_upload_widgets(aw):
     health_checker = get_health_checker()
 
     def on_health_status_changed(is_healthy):
-        if is_healthy:
-            statusIndicator.setText("✅ Connected")
-            statusIndicator.setStyleSheet("color: green; font-weight: bold;")
-        else:
-            statusIndicator.setText("❌ Disconnected")
-            statusIndicator.setStyleSheet("color: red; font-weight: bold;")
-        _log.info(f"🔄 Server status updated: {'Connected' if is_healthy else 'Disconnected'}")
+        try:
+            if statusIndicator and statusIndicator.parent() is not None:
+                if is_healthy:
+                    statusIndicator.setText("✅ Connected")
+                    statusIndicator.setStyleSheet("color: green; font-weight: bold;")
+                else:
+                    statusIndicator.setText("❌ Disconnected")
+                    statusIndicator.setStyleSheet("color: red; font-weight: bold;")
+                _log.info(f"🔄 Server status updated: {'Connected' if is_healthy else 'Disconnected'}")
+            else:
+                _log.debug("Status indicator widget no longer exists, skipping update")
+        except RuntimeError as e:
+            _log.debug(f"Status indicator widget was destroyed: {e}")
 
     def on_connection_error(error_msg):
-        statusIndicator.setText(f"❌ Error: {error_msg[:30]}...")
-        statusIndicator.setStyleSheet("color: red; font-weight: bold;")
-        _log.error(f"🔴 Connection error: {error_msg}")
+        try:
+            if statusIndicator and statusIndicator.parent() is not None:
+                statusIndicator.setText(f"❌ Error: {error_msg[:30]}...")
+                statusIndicator.setStyleSheet("color: red; font-weight: bold;")
+                _log.error(f"🔴 Connection error: {error_msg}")
+            else:
+                _log.debug("Status indicator widget no longer exists, skipping error update")
+        except RuntimeError as e:
+            _log.debug(f"Status indicator widget was destroyed: {e}")
+
 
     # Connect the signals
     health_checker.health_status_changed.connect(on_health_status_changed)
@@ -378,6 +391,17 @@ def create_server_upload_widgets(aw):
     group_box.retryEdit = retryEdit
     group_box.statusIndicator = statusIndicator
     group_box.refreshButton = refreshButton
+
+    def cleanup_connections():
+        try:
+            health_checker.health_status_changed.disconnect(on_health_status_changed)
+            health_checker.connection_error.disconnect(on_connection_error)
+            _log.debug("Disconnected health checker signals")
+        except Exception as e:
+            _log.debug(f"Error disconnecting signals: {e}")
+
+    group_box.destroyed.connect(cleanup_connections)
+
 
     # Trigger initial health check after a short delay
     QTimer.singleShot(1000, trigger_health_check)

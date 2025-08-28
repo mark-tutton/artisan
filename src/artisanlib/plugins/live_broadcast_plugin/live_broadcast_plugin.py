@@ -140,7 +140,7 @@ class LiveBroadcastPlugin(PluginBase):
    
             # # Initialize broadcaster if auto-start is enabled
             if self.config.auto_start:
-                self._initialize_broadcaster() // TODO: revist this
+                self._initialize_broadcaster() # TODO: revist this
 
                 
             # self._initialize_plugin() 

@@ -811,6 +811,7 @@ class VMToolbar(NavigationToolbar): # pylint: disable=abstract-method
         self.locLabel.setFont(f)
 
 
+
 # add green flag menu on matplotlib v2.0 and later
         self.edit_curve_parameters_action = None
         if len(self.actions()) > 0:
@@ -867,6 +868,158 @@ class VMToolbar(NavigationToolbar): # pylint: disable=abstract-method
 #        # (see https://github.com/matplotlib/matplotlib/issues/22471)
 #        if mpl_version in [[3,5,0], [3,5,1]]:
 #            formlayout.ColorButton = MPLColorButtonPatched
+
+        # Add custom toolbar items - TODO: move to a separate file
+        self._add_custom_actions()
+
+
+# TOOLBAR PLUGIN STATUS - TODO: move to a separate file
+    def _add_custom_actions(self):
+        """Add custom toolbar actions"""
+        self.addSeparator()
+        
+        # Plugin Status Group
+        self._add_plugin_status_actions()
+        
+        self.addSeparator()
+        
+    
+    def _add_plugin_status_actions(self):
+        """Add plugin status indicators to toolbar"""
+        try:
+            from .plugins.manager import PluginManager
+            from .plugins.autosave.autosave_addons import get_health_checker
+            from .plugins.live_broadcast_plugin.get_plugin_status import get_broadcaster_status
+            
+            # Plugin Status Label
+            self.plugin_status_label = QLabel("🔌 Plugins:")
+            self.plugin_status_label.setStyleSheet("color: #666; font-size: 10px; margin: 2px;")
+            self.addWidget(self.plugin_status_label)
+            
+            # Autosave Plugin Status
+            self.autosave_status = QLabel("🏦")
+            self.autosave_status.setToolTip("Autosave Plugin Status")
+            self.autosave_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px;")
+            self.addWidget(self.autosave_status)
+            
+            # Live Broadcast Plugin Status
+            self.broadcast_status = QLabel("📡")
+            self.broadcast_status.setToolTip("Live Broadcast Plugin Status")
+            self.broadcast_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px;")
+            self.addWidget(self.broadcast_status)
+            
+            # Inventory Fetcher Plugin Status
+            self.inventory_status = QLabel("📦")
+            self.inventory_status.setToolTip("Inventory Fetcher Plugin Status")
+            self.inventory_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px;")
+            self.addWidget(self.inventory_status)
+            
+            # Refresh Button
+            self.refresh_plugins_btn = QPushButton("♻️")
+            self.refresh_plugins_btn.setToolTip("Refresh Plugin Status")
+            self.refresh_plugins_btn.setMaximumSize(24, 24)
+            self.refresh_plugins_btn.clicked.connect(self._refresh_plugin_status)
+            self.addWidget(self.refresh_plugins_btn)
+            
+            # Initial status update
+            self._update_plugin_status()
+            
+            # Set up timer for periodic updates
+            self.plugin_status_timer = QTimer()
+            self.plugin_status_timer.timeout.connect(self._update_plugin_status)
+            self.plugin_status_timer.start(30000)  # Update every 30 seconds
+            
+        except ImportError as e:
+            _log.warning(f"Could not import plugin modules: {e}")
+        except Exception as e:
+            _log.error(f"Error setting up plugin status: {e}")
+    
+    def _update_plugin_status(self):
+        """Update the status of all plugins"""
+        try:
+            # Update Autosave Plugin Status
+            self._update_autosave_status()
+            
+            # Update Live Broadcast Plugin Status
+            self._update_broadcast_status()
+            
+            # Update Inventory Fetcher Plugin Status
+            self._update_inventory_status()
+            
+        except Exception as e:
+            _log.error(f"Error updating plugin status: {e}")
+    
+    def _update_autosave_status(self):
+        """Update autosave plugin status"""
+        try:
+            from .plugins.autosave.autosave_addons import get_health_checker
+            
+            health_checker = get_health_checker()
+            if health_checker and hasattr(health_checker, 'is_healthy'):
+                if health_checker.is_healthy:
+                    self.autosave_status.setText("🏦✅")
+                    self.autosave_status.setToolTip("Autosave: Server Connected")
+                    self.autosave_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #d4edda; color: #155724;")
+                else:
+                    self.autosave_status.setText("🏦❌")
+                    self.autosave_status.setToolTip("Autosave: Server Disconnected")
+                    self.autosave_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #f8d7da; color: #721c24;")
+            else:
+                self.autosave_status.setText("🏦❓")
+                self.autosave_status.setToolTip("Autosave: Plugin Error")
+                self.autosave_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #fff3cd; color: #856404;")
+                
+        except Exception as e:
+            self.autosave_status.setText("🏦❓")
+            self.autosave_status.setToolTip(f"Autosave: Error - {str(e)[:50]}")
+            self.autosave_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #f8d7da; color: #721c24;")
+    
+    def _update_broadcast_status(self):
+        """Update live broadcast plugin status"""
+        try:
+            from .plugins.live_broadcast_plugin.get_plugin_status import get_broadcaster_status
+            
+            status = get_broadcaster_status()
+            if status:
+                if status.get('is_connected', False):
+                    self.broadcast_status.setText("📡✅")
+                    self.broadcast_status.setToolTip(f"Live Broadcast: Connected to {status.get('server_url', 'Unknown')}")
+                    self.broadcast_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #d4edda; color: #155724;")
+                else:
+                    self.broadcast_status.setText("📡❌")
+                    self.broadcast_status.setToolTip(f"Live Broadcast: Disconnected - {status.get('last_error', 'Unknown error')}")
+                    self.broadcast_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #f8d7da; color: #721c24;")
+            else:
+                self.broadcast_status.setText("📡❓")
+                self.broadcast_status.setToolTip("Live Broadcast: Plugin Not Loaded")
+                self.broadcast_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #fff3cd; color: #856404;")
+                
+        except Exception as e:
+            self.broadcast_status.setText("📡❓")
+            self.broadcast_status.setToolTip(f"Live Broadcast: Error - {str(e)[:50]}")
+            self.broadcast_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #f8d7da; color: #721c24;")
+    
+    def _update_inventory_status(self):
+        """Update inventory fetcher plugin status"""
+        try:
+            # TODO: Implement a status function for this plugin
+            self.inventory_status.setText("📦❓")
+            self.inventory_status.setToolTip("Inventory Fetcher: Status Unknown")
+            self.inventory_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #e2e3e5; color: #383d41;")
+                
+        except Exception as e:
+            self.inventory_status.setText("📦❓")
+            self.inventory_status.setToolTip(f"Inventory Fetcher: Error - {str(e)[:50]}")
+            self.inventory_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #f8d7da; color: #721c24;")
+    
+    def _refresh_plugin_status(self):
+        """Manual refresh of plugin status"""
+        try:
+            self._update_plugin_status()
+            self.aw.sendmessage("Plugin status refreshed")
+        except Exception as e:
+            _log.error(f"Error refreshing plugin status: {e}")
+
 
 
 #######################################################################################

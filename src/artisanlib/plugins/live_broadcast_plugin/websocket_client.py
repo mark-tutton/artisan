@@ -811,7 +811,6 @@ class SocketIOBroadcaster(QObject):
                 f"Reconnection attempt {self.reconnect_attempts}/{self.max_reconnect_attempts}"
             )
 
-
 # Check if socketio is available and log a warning if not
 if not SOCKETIO_AVAILABLE:
     _log.warning(
