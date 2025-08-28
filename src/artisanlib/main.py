@@ -1002,10 +1002,35 @@ class VMToolbar(NavigationToolbar): # pylint: disable=abstract-method
     def _update_inventory_status(self):
         """Update inventory fetcher plugin status"""
         try:
-            # TODO: Implement a status function for this plugin
-            self.inventory_status.setText("📦❓")
-            self.inventory_status.setToolTip("Inventory Fetcher: Status Unknown")
-            self.inventory_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #e2e3e5; color: #383d41;")
+            # Try to import and get status
+            try:
+                from artisanlib.plugins.inventory_fetcher.get_plugin_status import get_inventory_fetcher_status
+                status = get_inventory_fetcher_status()
+            except ImportError:
+                status = None
+                _log.debug("Inventory fetcher plugin not available")
+            
+            if status and status.get('plugin_loaded', False):
+                if status.get('is_connected', False):
+                    # Check authentication status
+                    auth_status = status.get('auth_status', 'unknown')
+                    if auth_status in ['jwt_valid', 'api_token', 'legacy_api_key']:
+                        self.inventory_status.setText("📦✅")
+                        self.inventory_status.setToolTip(f"Inventory Fetcher: Connected to {status.get('server_url', 'Unknown')} ({auth_status})")
+                        self.inventory_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #d4edda; color: #155724;")
+                    else:
+                        self.inventory_status.setText("📦⚠️")
+                        self.inventory_status.setToolTip(f"Inventory Fetcher: Connected but auth issue - {auth_status}")
+                        self.inventory_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #fff3cd; color: #856404;")
+                else:
+                    self.inventory_status.setText("📦❌")
+                    error_msg = status.get('last_error', 'Unknown error')
+                    self.inventory_status.setToolTip(f"Inventory Fetcher: Disconnected - {error_msg}")
+                    self.inventory_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #f8d7da; color: #721c24;")
+            else:
+                self.inventory_status.setText("��❓")
+                self.inventory_status.setToolTip("Inventory Fetcher: Plugin Not Loaded")
+                self.inventory_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #fff3cd; color: #856404;")
                 
         except Exception as e:
             self.inventory_status.setText("📦❓")

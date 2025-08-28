@@ -2763,12 +2763,26 @@ class editGraphDlg(ArtisanResizeablDialog):
         if self.stockWorker is not None and self.updateStockSignalConnection is not None:
             self.stockWorker.updatedSignal.disconnect(self.updateStockSignalConnection)
         
+        # try:
+        #     if hasattr(self, "inventory_plugin") and self.inventory_plugin is not None:
+        #         self.inventory_plugin.signals.inventory_updated.disconnect(self.update_inventory_combo)
+        # except Exception as e:
+        #     import logging
+        #     logging.getLogger(__name__).exception("Failed to disconnect inventory_updated signal: %s", e)
+
         try:
             if hasattr(self, "inventory_plugin") and self.inventory_plugin is not None:
-                self.inventory_plugin.signals.inventory_updated.disconnect(self.update_inventory_combo)
+                # Disconnect using the stored slot references from the patch
+                if hasattr(self.inventory_plugin, '_inventory_updated_slot'):
+                    self.inventory_plugin.signals.inventory_updated.disconnect(self.inventory_plugin._inventory_updated_slot)
+                if hasattr(self.inventory_plugin, '_fetch_completed_slot'):
+                    self.inventory_plugin.signals.fetch_completed.disconnect(self.inventory_plugin._fetch_completed_slot)
+                if hasattr(self.inventory_plugin, '_fetch_failed_slot'):
+                    self.inventory_plugin.signals.fetch_failed.disconnect(self.inventory_plugin._fetch_failed_slot)
         except Exception as e:
             import logging
-            logging.getLogger(__name__).exception("Failed to disconnect inventory_updated signal: %s", e)
+            logging.getLogger(__name__).exception("Failed to disconnect inventory signals: %s", e)
+        
 
     # calcs volume (in ml) from density (in g/l) and weight (in g)
     @staticmethod
