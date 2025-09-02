@@ -28,8 +28,8 @@ class InventoryFetcherPlugin(ArtisanPlugin):
     
     @property
     def name(self) -> str:
-        """Plugin name"""
-        return "Inventory Fetcher"
+        """Plugin name - must match what the plugin manager expects"""
+        return "Inventory Fetcher"  # This must match exactly
     
     @property
     def version(self) -> str:

@@ -72,7 +72,9 @@ class LiveBroadcastSignals(QObject):
 class LiveBroadcastPlugin(PluginBase):
     @property
     def name(self) -> str:
-        return "Live Broadcast"
+        """Plugin name"""
+        return "Live Broadcast" 
+    
 
     @property
     def version(self) -> str:
@@ -141,6 +143,7 @@ class LiveBroadcastPlugin(PluginBase):
 
     def _initialize_plugin(self) -> None:
         """Initialize the plugin using the base class threading system"""
+
         try:
             # Check headless mode
             self.headless_mode = getattr(self.config, "headless_mode", False)
@@ -1065,18 +1068,44 @@ class LiveBroadcastPlugin(PluginBase):
         try:
             if not hasattr(qmc, "etypesf") or not hasattr(qmc, "eventsvalues"):
                 return None
+            
+            # Get the event data from the extraevents arrays
+            if not hasattr(self.main_window, "extraeventstypes") or not hasattr(self.main_window, "extraeventsvalues"):
+                return None
+            
+            # Check if the index is valid
+            if (event_index >= len(self.main_window.extraeventstypes) or 
+                event_index >= len(self.main_window.extraeventsvalues) or
+                event_index >= len(self.main_window.extraeventsdescriptions)):
+                self.logger.warning(f"Event index {event_index} out of range for extraevents arrays")
+                return None
 
-            event_type = qmc.etypesf(event_index)
-            event_value = qmc.eventsvalues(event_index)
+            # Get the raw event type (integer) from extraeventstypes
+            raw_event_type = self.main_window.extraeventstypes[event_index]
+            event_value = self.main_window.extraeventsvalues[event_index]
+            event_description = self.main_window.extraeventsdescriptions[event_index]
+
+            # Convert the event type to a string using qmc.etypesf
+            if hasattr(qmc, "etypesf") and raw_event_type <= 4:
+                event_type_str = qmc.etypesf(raw_event_type)
+            else:
+                event_type_str = f"Type_{raw_event_type}"
+                
+            # Convert the event value to a string using qmc.eventsvalues
+            if hasattr(qmc, "eventsvalues"):
+                event_value_str = qmc.eventsvalues(event_value)
+            else:
+                event_value_str = str(event_value)
 
             return {
                 "type": "custom_event",
-                "event_type": event_type,
-                "event_value": event_value,
+                "event_type": event_type_str,
+                "event_value": event_value_str,
+                "event_description": event_description,
                 "event_index": event_index,
                 "timestamp": time.time(),
             }
-
+        
         except Exception as e:
             self._record_error("CustomEventDataError", str(e), {"event_index": event_index})
             return None
@@ -1376,8 +1405,91 @@ class LiveBroadcastPlugin(PluginBase):
             self._record_error("MonitoringStateError", str(e))
             return {}
 
+    # def _get_extra_sensor_values(self, qmc) -> Dict[str, Any]:
+    #     """Get extra sensor values"""
+    #     try:
+    #         sensor_values = {
+    #             "et_temperature": None,
+    #             "bt_temperature": None,
+    #             "ambient_temperature": None,
+    #             "ambient_pressure": None,
+    #             "ambient_humidity": None,
+    #             "extra_sensors": {"extra1_sensors": {}, "extra2_sensors": {}, "all_sensors": {}},
+    #         }
+
+    #         # Get ET and BT temperatures
+    #         try:
+    #             if hasattr(qmc, "RTtemp1"):
+    #                 sensor_values["et_temperature"] = qmc.RTtemp1
+    #             if hasattr(qmc, "RTtemp2"):
+    #                 sensor_values["bt_temperature"] = qmc.RTtemp2
+    #         except Exception as e:
+    #             self._record_error("ETBTError", str(e))
+
+    #         # Get ambient values
+    #         try:
+    #             if hasattr(qmc, "ambientTemp"):
+    #                 sensor_values["ambient_temperature"] = qmc.ambientTemp
+    #             if hasattr(qmc, "pressure"):
+    #                 sensor_values["ambient_pressure"] = qmc.pressure
+    #             if hasattr(qmc, "humidity"):
+    #                 sensor_values["ambient_humidity"] = qmc.humidity
+    #         except Exception as e:
+    #             self._record_error("AmbientError", str(e))
+
+    #         # Get extra sensor values
+    #         try:
+    #             if hasattr(qmc, "extratemp1"):
+    #                 for i, temp in enumerate(qmc.extratemp1):
+    #                     if temp is not None and temp != 0:
+    #                         sensor_name = f"sensor_{i}"
+    #                         if hasattr(qmc, "extraname1") and i < len(qmc.extraname1):
+    #                             sensor_name = qmc.extraname1[i] or f"sensor_{i}"
+
+    #                         sensor_values["extra_sensors"]["extra1_sensors"][sensor_name] = {
+    #                             "name": sensor_name,
+    #                             "temperature": temp,
+    #                             "unit": "°F",
+    #                         }
+
+    #                         sensor_values["extra_sensors"]["all_sensors"][sensor_name] = {
+    #                             "type": "extra1",
+    #                             "index": i,
+    #                             "temperature": temp,
+    #                             "unit": "°F",
+    #                         }
+
+    #             if hasattr(qmc, "extratemp2"):
+    #                 for i, temp in enumerate(qmc.extratemp2):
+    #                     if temp is not None and temp != 0:
+    #                         sensor_name = f"sensor_{i}"
+    #                         if hasattr(qmc, "extraname2") and i < len(qmc.extraname2):
+    #                             sensor_name = qmc.extraname2[i] or f"sensor_{i}"
+
+    #                         sensor_values["extra_sensors"]["extra2_sensors"][sensor_name] = {
+    #                             "name": sensor_name,
+    #                             "temperature": temp,
+    #                             "unit": "°F",
+    #                         }
+
+    #                         sensor_values["extra_sensors"]["all_sensors"][sensor_name] = {
+    #                             "type": "extra2",
+    #                             "index": i,
+    #                             "temperature": temp,
+    #                             "unit": "°F",
+    #                         }
+    #         except Exception as e:
+    #             self._record_error("ExtraSensorValuesError", str(e))
+
+    #         return sensor_values
+
+    #     except Exception as e:
+    #         self._record_error("SensorValuesError", str(e))
+    #         return {}
+
+
     def _get_extra_sensor_values(self, qmc) -> Dict[str, Any]:
-        """Get extra sensor values"""
+        """Get extra sensor values including raw values for non-temperature sensors"""
         try:
             sensor_values = {
                 "et_temperature": None,
@@ -1408,46 +1520,98 @@ class LiveBroadcastPlugin(PluginBase):
             except Exception as e:
                 self._record_error("AmbientError", str(e))
 
-            # Get extra sensor values
+            # Get extra sensor values with raw data support
             try:
-                if hasattr(qmc, "extratemp1"):
+                if hasattr(qmc, "extratemp1") and hasattr(qmc, "extradevices"):
                     for i, temp in enumerate(qmc.extratemp1):
-                        if temp is not None and temp != 0:
+                        if temp is not None and temp != -1:  # -1 indicates no reading
                             sensor_name = f"sensor_{i}"
                             if hasattr(qmc, "extraname1") and i < len(qmc.extraname1):
                                 sensor_name = qmc.extraname1[i] or f"sensor_{i}"
 
+                            # Get device type to determine sensor category
+                            device_type = qmc.extradevices[i] if i < len(qmc.extradevices) else 25
+                            
+                            # Get raw values for non-temperature sensors
+                            raw_value1 = None
+                            raw_value2 = None
+                            
+                            if hasattr(qmc, "RTextratemp1") and i < len(qmc.RTextratemp1):
+                                raw_value1 = qmc.RTextratemp1[i]
+                            if hasattr(qmc, "RTextratemp2") and i < len(qmc.RTextratemp2):
+                                raw_value2 = qmc.RTextratemp2[i]
+
+                            # Determine sensor type and value representation
+                            sensor_info = self._get_sensor_info(device_type, temp, raw_value1, raw_value2)
+                            
                             sensor_values["extra_sensors"]["extra1_sensors"][sensor_name] = {
                                 "name": sensor_name,
                                 "temperature": temp,
-                                "unit": "°F",
+                                "raw_value": raw_value1,
+                                "device_type": device_type,
+                                "sensor_type": sensor_info["type"],
+                                "value": sensor_info["value"],
+                                "unit": sensor_info["unit"],
+                                "boolean_state": sensor_info["boolean_state"],
+                                "index": i,
                             }
 
                             sensor_values["extra_sensors"]["all_sensors"][sensor_name] = {
                                 "type": "extra1",
                                 "index": i,
                                 "temperature": temp,
-                                "unit": "°F",
+                                "raw_value": raw_value1,
+                                "device_type": device_type,
+                                "sensor_type": sensor_info["type"],
+                                "value": sensor_info["value"],
+                                "unit": sensor_info["unit"],
+                                "boolean_state": sensor_info["boolean_state"],
                             }
 
-                if hasattr(qmc, "extratemp2"):
+                if hasattr(qmc, "extratemp2") and hasattr(qmc, "extradevices"):
                     for i, temp in enumerate(qmc.extratemp2):
-                        if temp is not None and temp != 0:
+                        if temp is not None and temp != -1:  # -1 indicates no reading
                             sensor_name = f"sensor_{i}"
                             if hasattr(qmc, "extraname2") and i < len(qmc.extraname2):
                                 sensor_name = qmc.extraname2[i] or f"sensor_{i}"
 
+                            # Get device type to determine sensor category
+                            device_type = qmc.extradevices[i] if i < len(qmc.extradevices) else 25
+                            
+                            # Get raw values for non-temperature sensors
+                            raw_value1 = None
+                            raw_value2 = None
+                            
+                            if hasattr(qmc, "RTextratemp1") and i < len(qmc.RTextratemp1):
+                                raw_value1 = qmc.RTextratemp1[i]
+                            if hasattr(qmc, "RTextratemp2") and i < len(qmc.RTextratemp2):
+                                raw_value2 = qmc.RTextratemp2[i]
+
+                            # Determine sensor type and value representation
+                            sensor_info = self._get_sensor_info(device_type, temp, raw_value1, raw_value2)
+                            
                             sensor_values["extra_sensors"]["extra2_sensors"][sensor_name] = {
                                 "name": sensor_name,
                                 "temperature": temp,
-                                "unit": "°F",
+                                "raw_value": raw_value2,
+                                "device_type": device_type,
+                                "sensor_type": sensor_info["type"],
+                                "value": sensor_info["value"],
+                                "unit": sensor_info["unit"],
+                                "boolean_state": sensor_info["boolean_state"],
+                                "index": i,
                             }
 
                             sensor_values["extra_sensors"]["all_sensors"][sensor_name] = {
                                 "type": "extra2",
                                 "index": i,
                                 "temperature": temp,
-                                "unit": "°F",
+                                "raw_value": raw_value2,
+                                "device_type": device_type,
+                                "sensor_type": sensor_info["type"],
+                                "value": sensor_info["value"],
+                                "unit": sensor_info["unit"],
+                                "boolean_state": sensor_info["boolean_state"],
                             }
             except Exception as e:
                 self._record_error("ExtraSensorValuesError", str(e))
@@ -1457,6 +1621,173 @@ class LiveBroadcastPlugin(PluginBase):
         except Exception as e:
             self._record_error("SensorValuesError", str(e))
             return {}
+
+    def _get_sensor_info(self, device_type: int, temp: float, raw_value1: float, raw_value2: float) -> Dict[str, Any]:
+        """Determine sensor type and value representation based on device type"""
+        try:
+            # Device type mappings based on comm.py devicefunctionlist
+            # Temperature sensors (return temperature values)
+            temp_devices = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 19, 20, 21, 23, 24, 26, 28, 30, 31, 32, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 51, 53, 56, 57, 58, 59, 60, 61, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 85, 86, 101, 102, 104, 105, 115, 116, 117, 126, 127, 134, 138, 142, 164, 168, 169, 171, 174}
+            
+            # Boolean/Logic sensors (return boolean states)
+            boolean_devices = {22, 54, 87, 90, 91, 135, 136, 140, 141, 144, 145, 165}
+            
+            # Percentage/Duty cycle sensors
+            percentage_devices = {22, 54, 87, 90, 91, 135, 136, 140, 141, 144, 145, 165}
+            
+            # RPM/Speed sensors
+            rpm_devices = {84, 87, 143}
+            
+            # Pressure sensors
+            pressure_devices = {135}
+            
+            # Fan/Heater control sensors
+            control_devices = {54, 90, 91, 135, 136, 140, 141, 144, 145, 165}
+
+            if device_type in temp_devices:
+                return {
+                    "type": "temperature",
+                    "value": temp,
+                    "unit": "°F",
+                    "boolean_state": None
+                }
+            elif device_type in boolean_devices:
+                # Convert raw values to boolean states
+                bool_state = self._convert_to_boolean(raw_value1, raw_value2, device_type)
+                return {
+                    "type": "boolean",
+                    "value": bool_state,
+                    "unit": "state",
+                    "boolean_state": bool_state
+                }
+            elif device_type in percentage_devices:
+                # Convert to percentage values
+                percentage = self._convert_to_percentage(raw_value1, raw_value2, device_type)
+                return {
+                    "type": "percentage",
+                    "value": percentage,
+                    "unit": "%",
+                    "boolean_state": None
+                }
+            elif device_type in rpm_devices:
+                # Convert to RPM values
+                rpm = self._convert_to_rpm(raw_value1, raw_value2, device_type)
+                return {
+                    "type": "rpm",
+                    "value": rpm,
+                    "unit": "RPM",
+                    "boolean_state": None
+                }
+            elif device_type in pressure_devices:
+                # Convert to pressure values
+                pressure = self._convert_to_pressure(raw_value1, raw_value2, device_type)
+                return {
+                    "type": "pressure",
+                    "value": pressure,
+                    "unit": "bar",
+                    "boolean_state": None
+                }
+            elif device_type in control_devices:
+                # Control devices (fan/heater) - return both boolean state and percentage
+                bool_state = self._convert_to_boolean(raw_value1, raw_value2, device_type)
+                percentage = self._convert_to_percentage(raw_value1, raw_value2, device_type)
+                return {
+                    "type": "control",
+                    "value": percentage,
+                    "unit": "%",
+                    "boolean_state": bool_state
+                }
+            else:
+                # Default to temperature if unknown device type
+                return {
+                    "type": "unknown",
+                    "value": temp,
+                    "unit": "°F",
+                    "boolean_state": None
+                }
+
+        except Exception as e:
+            self._record_error("SensorInfoError", str(e), {"device_type": device_type})
+            return {
+                "type": "error",
+                "value": temp,
+                "unit": "°F",
+                "boolean_state": None
+            }
+
+    def _convert_to_boolean(self, raw_value1: float, raw_value2: float, device_type: int) -> bool:
+        """Convert raw sensor values to boolean states"""
+        try:
+            # Different devices have different boolean logic
+            if device_type == 22:  # PID duty cycle
+                return raw_value1 > 0
+            elif device_type in {54, 90, 91}:  # Hottop/Slider controls
+                return raw_value1 > 0 or raw_value2 > 0
+            elif device_type in {135, 136}:  # Santoker controls
+                return raw_value1 > 0 or raw_value2 > 0
+            elif device_type in {140, 141}:  # Kaleido controls
+                return raw_value1 > 0 or raw_value2 > 0
+            elif device_type in {144, 145}:  # IKAWA controls
+                return raw_value1 > 0 or raw_value2 > 0
+            elif device_type == 165:  # Mugma controls
+                return raw_value1 > 0 or raw_value2 > 0
+            elif device_type == 87:  # R1 RPM/State
+                return raw_value2 > 0  # State is typically boolean
+            else:
+                # Default boolean logic
+                return raw_value1 > 0 or raw_value2 > 0
+        except Exception as e:
+            self._record_error("BooleanConversionError", str(e), {"device_type": device_type})
+            return False
+
+    def _convert_to_percentage(self, raw_value1: float, raw_value2: float, device_type: int) -> float:
+        """Convert raw sensor values to percentage values"""
+        try:
+            if device_type == 22:  # PID duty cycle
+                return min(max(raw_value1, 0), 100)  # Clamp to 0-100%
+            elif device_type in {54, 90, 91}:  # Hottop/Slider controls
+                return min(max(raw_value1, 0), 100)
+            elif device_type in {135, 136}:  # Santoker controls
+                return min(max(raw_value1, 0), 100)
+            elif device_type in {140, 141}:  # Kaleido controls
+                return min(max(raw_value1, 0), 100)
+            elif device_type in {144, 145}:  # IKAWA controls
+                return min(max(raw_value1, 0), 100)
+            elif device_type == 165:  # Mugma controls
+                return min(max(raw_value1, 0), 100)
+            else:
+                # Default percentage conversion
+                return min(max(raw_value1, 0), 100)
+        except Exception as e:
+            self._record_error("PercentageConversionError", str(e), {"device_type": device_type})
+            return 0.0
+
+    def _convert_to_rpm(self, raw_value1: float, raw_value2: float, device_type: int) -> float:
+        """Convert raw sensor values to RPM values"""
+        try:
+            if device_type == 84:  # R1 drum
+                return raw_value1
+            elif device_type == 87:  # R1 RPM
+                return raw_value1
+            elif device_type == 143:  # IKAWA RPM
+                return raw_value1
+            else:
+                return raw_value1
+        except Exception as e:
+            self._record_error("RPMConversionError", str(e), {"device_type": device_type})
+            return 0.0
+
+    def _convert_to_pressure(self, raw_value1: float, raw_value2: float, device_type: int) -> float:
+        """Convert raw sensor values to pressure values"""
+        try:
+            if device_type == 135:  # Santoker pressure
+                return raw_value1
+            else:
+                return raw_value1
+        except Exception as e:
+            self._record_error("PressureConversionError", str(e), {"device_type": device_type})
+            return 0.0
+        
 
     def _safe_get_uptime(self, qmc) -> float:
         """Safely get uptime"""

@@ -4710,9 +4710,75 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
         
         # Register plugins
         self.plugin_manager.register_plugin(LiveBroadcastPlugin)
-        self.plugin_manager.register_plugin(InventoryFetcherPlugin)
-        self.inventory_fetcher_plugin = InventoryFetcherPlugin()
-        self.inventory_fetcher_plugin.initialize(self)
+        # self.plugin_manager.register_plugin(InventoryFetcherPlugin)
+        # self.inventory_fetcher_plugin = InventoryFetcherPlugin() # FIXME: blocking main UI thread
+        # self.inventory_fetcher_plugin.initialize(self) # 
+
+
+    # def initialize_plugins(self):
+    #     """Initialize and register plugins"""
+    #     from artisanlib.plugins.live_broadcast_plugin import LiveBroadcastPlugin
+    #     from artisanlib.plugins.inventory_fetcher import InventoryFetcherPlugin
+        
+    #     # Register the plugins we know exist
+    #     self.plugin_manager.register_plugin(LiveBroadcastPlugin)
+    #     self.plugin_manager.register_plugin(InventoryFetcherPlugin)
+        
+    #     # Load plugin enable/disable states from configuration
+    #     self._load_plugin_states()
+        
+    #     # Initialize the inventory fetcher plugin reference for backward compatibility
+    #     # This allows existing code to still access it directly if needed
+    #     self.inventory_fetcher_plugin = self.plugin_manager.get_plugin("Inventory Fetcher")
+        
+    #     # Simple logging without complex status queries that might hang
+    #     _log.info("Plugin initialization complete")
+    #     _log.info(f"Registered plugins: {list(self.plugin_manager.plugins.keys())}")
+    
+    # def _load_plugin_states(self):
+    #     """Load plugin enable/disable states from configuration"""
+    #     try:
+    #         # Load from QSettings or configuration file
+    #         from PyQt6.QtCore import QSettings
+    #         settings = QSettings()
+    #         settings.beginGroup("Plugins")
+            
+    #         for plugin_name in self.plugin_manager.plugins.keys():
+    #             # Get the stored state, default to enabled
+    #             enabled = settings.value(f"{plugin_name}/enabled", True, type=bool)
+    #             auto_enable = settings.value(f"{plugin_name}/auto_enable", True, type=bool)
+                
+    #             plugin = self.plugin_manager.get_plugin(plugin_name)
+    #             if plugin:
+    #                 plugin.set_auto_enable(auto_enable)
+    #                 if not enabled:
+    #                     plugin.disable()
+    #                     _log.info(f"Plugin {plugin_name} loaded in disabled state")
+    #                 else:
+    #                     _log.info(f"Plugin {plugin_name} loaded in enabled state")
+            
+    #         settings.endGroup()
+            
+    #     except Exception as e:
+    #         _log.error(f"Failed to load plugin states: {e}")
+    
+    # def _save_plugin_states(self):
+    #     """Save plugin enable/disable states to configuration"""
+    #     try:
+    #         from PyQt6.QtCore import QSettings
+    #         settings = QSettings()
+    #         settings.beginGroup("Plugins")
+            
+    #         for plugin_name, reg in self.plugin_manager.plugins.items():
+    #             plugin = reg.plugin
+    #             settings.setValue(f"{plugin_name}/enabled", plugin.is_enabled)
+    #             settings.setValue(f"{plugin_name}/auto_enable", plugin._auto_enable)
+            
+    #         settings.endGroup()
+    #         _log.info("Plugin states saved to configuration")
+            
+    #     except Exception as e:
+    #         _log.error(f"Failed to save plugin states: {e}")
 
         
 
