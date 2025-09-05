@@ -390,65 +390,229 @@ class Artisan(QtSingleApplication):
     # file://<path>                  : loads file from path
     #                                  if query is "background" Artisan is not raised to the foreground
     #                                  if query is "template" and the file has an .alog extension, the profile is loaded as background profile
+    # def open_url(self, url:QUrl) -> None:
+    #     print(f"DEBUG: open_url called with: {url}")
+    #     _log.debug('open_url(%s)', url)
+       
+    #     aw:Optional[ApplicationWindow] = self.activationWindow()
+    #     _log.debug(f"DEBUG: activationWindow() returned: {aw is not None}")
+    #     print(f"DEBUG: activationWindow() returned: {aw is not None}")
+    
+    #     print(f"DEBUG: URL scheme: '{url.scheme()}', authority: '{url.authority()}', hasQuery: {url.hasQuery()}")
+            
+    #     if aw is not None and not aw.qmc.flagon and not aw.qmc.designerflag and not aw.qmc.wheelflag and aw.qmc.flavorchart_plot is None: # only if not yet monitoring
+    #         _log.debug("DEBUG: ApplicationWindow is ready for URL processing")
+    #         print(f"DEBUG: ApplicationWindow is ready for URL processing")
+    #         _log.debug(f"DEBUG: Processing URL scheme: {url.scheme()}, authority: {url.authority()}")
+    #         print(f"DEBUG: Processing URL scheme: {url.scheme()}, authority: {url.authority()}")
+    #         if url.scheme() == 'artisan' and url.authority() in {'roast','template'}:
+    #             _log.debug("DEBUG: Processing artisan://roast or artisan://template")
+    #             print(f"DEBUG: Processing artisan://roast or artisan://template")
+    #             # we try to resolve this one into a file URL and recurse
+    #             roast_UUID = url.toString(QUrl.UrlFormattingOption.RemoveScheme | QUrl.UrlFormattingOption.RemoveAuthority | QUrl.UrlFormattingOption.RemoveQuery | QUrl.UrlFormattingOption.RemoveFragment | QUrl.UrlFormattingOption.StripTrailingSlash)[1:]
+    #             if aw.qmc.roastUUID is None or aw.qmc.roastUUID != roast_UUID:
+    #                 # not yet open, lets try to find the path to that roastUUID and open it
+    #                 print(f"DEBUG: Not yet open, lets try to find the path to that roastUUID and open it")
+    #                 profile_path = plus.register.getPath(roast_UUID)
+    #                 if profile_path:
+    #                     print(f"DEBUG: Profile path found: {profile_path}")
+    #                     aw.sendmessage(QApplication.translate('Message','URL open profile: {0}').format(profile_path))
+    #                     file_url = QUrl.fromLocalFile(profile_path)
+    #                     if url.authority() == 'template':
+    #                         print(f"DEBUG: Setting query to template")
+    #                         file_url.setQuery('template')
+    #                     self.open_url(file_url)
+    #         # elif url.scheme() == 'artisan' and url.authority() == 'profile' and url.hasQuery():
+    #         #     try:
+    #         #         query = QUrlQuery(url.query())
+    #         #         if query.hasQueryItem('url'):
+    #         #             import requests
+    #         #             query_url = QUrl(requests.utils.unquote(query.queryItemValue('url'))) # type: ignore # Module has no attribute "unquote"
+    #         #             if aw.comparator is not None:
+    #         #                 aw.comparatorAddProfileURLSignal.emit(query_url)
+    #         #             else:
+    #         #                 aw.importArtisanURLSignal.emit(query_url)
+    #         #     except Exception as e: # pylint: disable=broad-except
+    #         #         _log.exception(e)
+
+    #             # elif url.scheme() == 'artisan' and url.authority() == 'profile' and url.hasQuery():
+    #             #     _log.debug("DEBUG: Processing artisan://profile with query")
+    #             #     try:
+    #             #         query = QUrlQuery(url.query())
+    #             #         _log.info(f"DEBUG: Query: {query}")
+    #             #         if query.hasQueryItem('url'):
+    #             #             import requests
+    #             #             query_url = QUrl(requests.utils.unquote(query.queryItemValue('url')))
+    #             #             _log.info(f"DEBUG: Query URL: {query_url}")
+    #             #             # Check if this should be loaded as template
+    #             #             is_template = (query.hasQueryItem('template') and query.queryItemValue('template') == 'true') or '/template' in query_url.toString()
+    #             #             _log.info(f"DEBUG: Is template: {is_template}")
+    #             #             if aw.comparator is not None:
+    #             #                 aw.comparatorAddProfileURLSignal.emit(query_url)
+    #             #             elif is_template:
+    #             #                 # Load as background template
+    #             #                 _log.info(f"DEBUG: Loading as background template")
+    #             #                 aw.loadBackgroundURLSignal.emit(query_url)
+    #             #             else:
+    #             #                 _log.info(f"DEBUG: Loading as profile")
+    #             #                 aw.importArtisanURLSignal.emit(query_url)
+    #             #     except Exception as e: # pylint: disable=broad-except
+    #             #         _log.exception(e)
+    #             elif url.scheme() == 'artisan' and url.authority() == 'profile' and url.hasQuery():
+    #                 print("DEBUG: Processing artisan://profile with query")
+    #                 _log.debug("DEBUG: Processing artisan://profile with query")
+    #                 try:
+    #                     query = QUrlQuery(url.query())
+    #                     print(f"DEBUG: Query: {query}")
+    #                     _log.info(f"DEBUG: Query: {query}")
+    #                     if query.hasQueryItem('url'):
+    #                         import requests
+    #                         query_url = QUrl(requests.utils.unquote(query.queryItemValue('url')))
+    #                         print(f"DEBUG: Query URL: {query_url}")
+    #                         _log.info(f"DEBUG: Query URL: {query_url}")
+    #                         # Check if this should be loaded as template
+    #                         is_template = (query.hasQueryItem('template') and query.queryItemValue('template') == 'true') or '/template' in query_url.toString()
+    #                         print(f"DEBUG: Is template: {is_template}")
+    #                         _log.info(f"DEBUG: Is template: {is_template}")
+    #                         if aw.comparator is not None:
+    #                             print("DEBUG: Comparator exists, using comparatorAddProfileURLSignal")
+    #                             aw.comparatorAddProfileURLSignal.emit(query_url)
+    #                         elif is_template:
+    #                             # Load as background template
+    #                             print("DEBUG: Loading as background template")
+    #                             _log.info(f"DEBUG: Loading as background template")
+    #                             aw.loadBackgroundURLSignal.emit(query_url)
+    #                         else:
+    #                             print("DEBUG: Loading as profile")
+    #                             _log.info(f"DEBUG: Loading as profile")
+    #                             aw.importArtisanURLSignal.emit(query_url)
+    #                 except Exception as e: # pylint: disable=broad-except
+    #                     print(f"DEBUG: Exception in open_url: {e}")
+    #                     _log.exception(e)
+    #             else: 
+    #                 print(f"DEBUG: URL doesn't match expected patterns - scheme: '{url.scheme()}', authority: '{url.authority()}', hasQuery: {url.hasQuery()}")
+            
+    #         elif url.scheme() == 'file':
+    #             aw.sendmessage(QApplication.translate('Message','URL open profile: {0}').format(url.toDisplayString()))
+    #             url_query = None
+    #             if url.hasQuery():
+    #                 url_query = url.query()
+    #             if url_query is None or url_query != 'background':
+    #                 # by default we raise Artisan to the foreground
+    #                 self.activateWindowSignal.emit()
+    #             url.setQuery(None) # Argument 1 to "setQuery" of "QUrl" has incompatible type "None"; expected "str" # remove any query to get a valid file path
+    #             url.setFragment(None) # Argument 1 to "setFragment" of "QUrl" has incompatible type "None"; expected "str" # remove also any potential fragment
+    #             filename = url.toString(QUrl.UrlFormattingOption.PreferLocalFile)
+    #             qfile = QFileInfo(filename)
+    #             file_suffix = qfile.suffix()
+
+    #             if file_suffix == 'alog':
+    #                 modifiers = QApplication.keyboardModifiers()
+    #                 if aw.comparator is not None:
+    #                     # add Artisan profile to the comparator selection
+    #                     aw.comparatorAddProfileSignal.emit(filename)
+    #                 # load Artisan profile on double-click on *.alog file or as result of a drag-and-drop action to the canvas
+    #                 # in case OPTION/ALT key is hold, load into background, else foreground
+    #                 elif (url_query is not None and url_query == 'template') or modifiers == Qt.KeyboardModifier.AltModifier:
+    #                     aw.loadBackgroundSignal.emit(filename)
+    #                 else:
+    #                     aw.loadFileSignal.emit(filename)
+    #             elif file_suffix == 'alrm' and aw.app is not None and not aw.app.artisanviewerMode:
+    #                 # load Artisan alarms on double-click on *.alrm file
+    #                 aw.loadAlarmsSignal.emit(filename)
+    #             elif file_suffix == 'apal' and aw.app is not None and not aw.app.artisanviewerMode:
+    #                 # load Artisan palettes on double-click on *.apal file
+    #                 aw.loadPalettesSignal.emit(filename)
+    #             elif file_suffix == 'json' and aw.app is not None and not aw.app.artisanviewerMode and aw.comparator is None:
+    #                 # import Artisan JSON profile
+    #                 aw.importJSON(filename)
+    #             elif file_suffix == 'xls' and aw.app is not None and not aw.app.artisanviewerMode and aw.comparator is None:
+    #                 # import Cropster XLS profile
+    #                 from artisanlib.cropster import extractProfileCropsterXLS
+    #                 aw.importExternal(extractProfileCropsterXLS, QApplication.translate('Message','Import Cropster XLS'),'*.xls',filename)
+    #             elif file_suffix == 'csv' and aw.app is not None and not aw.app.artisanviewerMode and aw.comparator is None:
+    #                 # import Giesen CSV profile
+    #                 from artisanlib.giesen import extractProfileGiesenCSV
+    #                 aw.importExternal(extractProfileGiesenCSV, QApplication.translate('Message','Import Giesen CSV'),'*.csv',filename)
+    #             elif file_suffix == 'xlsx' and aw.app is not None and not aw.app.artisanviewerMode and aw.comparator is None:
+    #                 # import Stronghold XLSX profile
+    #                 from artisanlib.stronghold import extractProfileStrongholdXLSX
+    #                 aw.importExternal(extractProfileStrongholdXLSX, QApplication.translate('Message','Import Stronghold XLSX'),'*.xlsx',filename)
+
+
+    #     elif platform.system() == 'Windows' and not self.artisanviewerMode:
+    #         msg = url.toString()  #here we don't want a local file, preserve the windows file:///
+    #         self.sendMessage2ArtisanInstance(msg,self._viewer_id)
+
+
+
+
     def open_url(self, url:QUrl) -> None:
+        print(f"DEBUG: open_url called with: {url}")
         _log.debug('open_url(%s)', url)
+    
         aw:Optional[ApplicationWindow] = self.activationWindow()
         _log.debug(f"DEBUG: activationWindow() returned: {aw is not None}")
-    
+        print(f"DEBUG: activationWindow() returned: {aw is not None}")
 
+        print(f"DEBUG: URL scheme: '{url.scheme()}', authority: '{url.authority()}', hasQuery: {url.hasQuery()}")
+            
         if aw is not None and not aw.qmc.flagon and not aw.qmc.designerflag and not aw.qmc.wheelflag and aw.qmc.flavorchart_plot is None: # only if not yet monitoring
             _log.debug("DEBUG: ApplicationWindow is ready for URL processing")
+            print(f"DEBUG: ApplicationWindow is ready for URL processing")
             _log.debug(f"DEBUG: Processing URL scheme: {url.scheme()}, authority: {url.authority()}")
-        
+            print(f"DEBUG: Processing URL scheme: {url.scheme()}, authority: {url.authority()}")
+            
             if url.scheme() == 'artisan' and url.authority() in {'roast','template'}:
                 _log.debug("DEBUG: Processing artisan://roast or artisan://template")
+                print(f"DEBUG: Processing artisan://roast or artisan://template")
                 # we try to resolve this one into a file URL and recurse
                 roast_UUID = url.toString(QUrl.UrlFormattingOption.RemoveScheme | QUrl.UrlFormattingOption.RemoveAuthority | QUrl.UrlFormattingOption.RemoveQuery | QUrl.UrlFormattingOption.RemoveFragment | QUrl.UrlFormattingOption.StripTrailingSlash)[1:]
                 if aw.qmc.roastUUID is None or aw.qmc.roastUUID != roast_UUID:
                     # not yet open, lets try to find the path to that roastUUID and open it
+                    print(f"DEBUG: Not yet open, lets try to find the path to that roastUUID and open it")
                     profile_path = plus.register.getPath(roast_UUID)
                     if profile_path:
+                        print(f"DEBUG: Profile path found: {profile_path}")
                         aw.sendmessage(QApplication.translate('Message','URL open profile: {0}').format(profile_path))
                         file_url = QUrl.fromLocalFile(profile_path)
                         if url.authority() == 'template':
+                            print(f"DEBUG: Setting query to template")
                             file_url.setQuery('template')
                         self.open_url(file_url)
-            # elif url.scheme() == 'artisan' and url.authority() == 'profile' and url.hasQuery():
-            #     try:
-            #         query = QUrlQuery(url.query())
-            #         if query.hasQueryItem('url'):
-            #             import requests
-            #             query_url = QUrl(requests.utils.unquote(query.queryItemValue('url'))) # type: ignore # Module has no attribute "unquote"
-            #             if aw.comparator is not None:
-            #                 aw.comparatorAddProfileURLSignal.emit(query_url)
-            #             else:
-            #                 aw.importArtisanURLSignal.emit(query_url)
-            #     except Exception as e: # pylint: disable=broad-except
-            #         _log.exception(e)
-
-                elif url.scheme() == 'artisan' and url.authority() == 'profile' and url.hasQuery():
-                    _log.debug("DEBUG: Processing artisan://profile with query")
-                    try:
-                        query = QUrlQuery(url.query())
-                        _log.info(f"DEBUG: Query: {query}")
-                        if query.hasQueryItem('url'):
-                            import requests
-                            query_url = QUrl(requests.utils.unquote(query.queryItemValue('url')))
-                            _log.info(f"DEBUG: Query URL: {query_url}")
-                            # Check if this should be loaded as template
-                            is_template = (query.hasQueryItem('template') and query.queryItemValue('template') == 'true') or '/template' in query_url.toString()
-                            _log.info(f"DEBUG: Is template: {is_template}")
-                            if aw.comparator is not None:
-                                aw.comparatorAddProfileURLSignal.emit(query_url)
-                            elif is_template:
-                                # Load as background template
-                                _log.info(f"DEBUG: Loading as background template")
-                                aw.loadBackgroundURLSignal.emit(query_url)
-                            else:
-                                _log.info(f"DEBUG: Loading as profile")
-                                aw.importArtisanURLSignal.emit(query_url)
-                    except Exception as e: # pylint: disable=broad-except
-                        _log.exception(e)
+            
+            elif url.scheme() == 'artisan' and url.authority() == 'profile' and url.hasQuery():
+                print("DEBUG: Processing artisan://profile with query")
+                _log.debug("DEBUG: Processing artisan://profile with query")
+                try:
+                    query = QUrlQuery(url.query())
+                    print(f"DEBUG: Query: {query}")
+                    _log.info(f"DEBUG: Query: {query}")
+                    if query.hasQueryItem('url'):
+                        import requests
+                        query_url = QUrl(requests.utils.unquote(query.queryItemValue('url')))
+                        print(f"DEBUG: Query URL: {query_url}")
+                        _log.info(f"DEBUG: Query URL: {query_url}")
+                        # Check if this should be loaded as template
+                        is_template = (query.hasQueryItem('template') and query.queryItemValue('template') == 'true') or '/template' in query_url.toString()
+                        print(f"DEBUG: Is template: {is_template}")
+                        _log.info(f"DEBUG: Is template: {is_template}")
+                        if aw.comparator is not None:
+                            print("DEBUG: Comparator exists, using comparatorAddProfileURLSignal")
+                            aw.comparatorAddProfileURLSignal.emit(query_url)
+                        elif is_template:
+                            # Load as background template
+                            print("DEBUG: Loading as background template")
+                            _log.info(f"DEBUG: Loading as background template")
+                            aw.loadBackgroundURLSignal.emit(query_url)
+                        else:
+                            print("DEBUG: Loading as profile")
+                            _log.info(f"DEBUG: Loading as profile")
+                            aw.importArtisanURLSignal.emit(query_url)
+                except Exception as e: # pylint: disable=broad-except
+                    print(f"DEBUG: Exception in open_url: {e}")
+                    _log.exception(e)
+            
             elif url.scheme() == 'file':
                 aw.sendmessage(QApplication.translate('Message','URL open profile: {0}').format(url.toDisplayString()))
                 url_query = None
@@ -495,7 +659,6 @@ class Artisan(QtSingleApplication):
                     # import Stronghold XLSX profile
                     from artisanlib.stronghold import extractProfileStrongholdXLSX
                     aw.importExternal(extractProfileStrongholdXLSX, QApplication.translate('Message','Import Stronghold XLSX'),'*.xlsx',filename)
-
 
         elif platform.system() == 'Windows' and not self.artisanviewerMode:
             msg = url.toString()  #here we don't want a local file, preserve the windows file:///
@@ -17746,27 +17909,47 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
     #     except Exception: # pylint: disable=broad-except
     #         return None
     def artisanURLextractor(url:QUrl,
-            _etypesdefault:List[str],
-            _alt_etypesdefault:List[str],
-            _artisanflavordefaultlabels:List[str],
-            _artisanURLextractor:Callable[[int],float]) -> Optional['ProfileData']:
+        _etypesdefault:List[str],
+        _alt_etypesdefault:List[str],
+        _artisanflavordefaultlabels:List[str],
+        _artisanURLextractor:Callable[[int],float]) -> Optional['ProfileData']:
         try:
             import requests
-            print(f"DEBUG: Fetching URL: {url.toString()}")
+            _log.debug(f"DEBUG: Fetching URL: {url.toString()}")
             r = requests.get(url.toString(),
                 allow_redirects=True,
                 timeout=(4, 15),
                 headers={'Accept-Encoding' : 'gzip'},
                 )
-            print(f"DEBUG: Response status: {r.status_code}")
-            print(f"DEBUG: Response content type: {r.headers.get('content-type')}")
-            print(f"DEBUG: First 200 chars: {r.text[:200]}")
+            _log.debug(f"DEBUG: Response status: {r.status_code}")
+            _log.debug(f"DEBUG: Response content type: {r.headers.get('content-type')}")
+            _log.debug(f"DEBUG: Response length: {len(r.text)}")
+            _log.debug(f"DEBUG: First 200 chars: {r.text[:200]}")
+            
+            # Check if response is valid
+            if r.status_code != 200:
+                _log.debug(f"DEBUG: HTTP error: {r.status_code}")
+                return None
+                
+            if not r.text.strip():
+                _log.debug(f"DEBUG: Empty response")
+                return None
             
             result = cast('ProfileData', ast.literal_eval(r.text))
-            print(f"DEBUG: Successfully parsed data")
+            _log.debug(f"DEBUG: Successfully parsed data with keys: {list(result.keys()) if result else 'None'}")
             return result
-        except Exception as e: # pylint: disable=broad-except
-            print(f"DEBUG: Error parsing data: {e}")
+        except requests.exceptions.RequestException as e:
+            _log.debug(f"DEBUG: Request error: {e}")
+            return None
+        except ast.SyntaxError as e:
+            _log.debug(f"DEBUG: Syntax error in Python literal: {e}")
+            _log.debug(f"DEBUG: Problematic text around error: {r.text[max(0, e.offset-50):e.offset+50] if 'r' in locals() else 'N/A'}")
+            return None
+        except Exception as e:
+            _log.debug(f"DEBUG: Unexpected error: {e}")
+            _log.debug(f"DEBUG: Error type: {type(e).__name__}")
+            import traceback
+            _log.debug(f"DEBUG: Full traceback:\n{traceback.format_exc()}")
             return None
 
     @pyqtSlot()
@@ -25856,44 +26039,85 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
         self.importExternalURL(self.artisanURLextractor, url=url)
 
     @pyqtSlot('QUrl')
+ 
     def loadBackgroundURLSlot(self, url:QUrl) -> None:
         """Load a profile from URL as background template"""
         _log.debug(f"DEBUG: loadBackgroundURLSlot called with URL: {url.toString()}")
         try:
-            # Download and parse the profile data
-            _log.debug("DEBUG: Calling artisanURLextractor")
-            obj = self.artisanURLextractor(url,
-                                        self.qmc.etypesdefault,
-                                        self.qmc.alt_etypesdefault,
-                                        self.qmc.artisanflavordefaultlabels,
-                                        self.qmc.eventsExternal2InternalValue)
+            import tempfile
+            import os
+            import requests
             
-            _log.debug(f"DEBUG: artisanURLextractor returned: {obj is not None}")
+            # Download the profile data
+            _log.debug("DEBUG: Downloading profile data from URL")
+            response = requests.get(url.toString(),
+                                allow_redirects=True,
+                                timeout=(4, 15),
+                                headers={'Accept-Encoding' : 'gzip'})
             
-            if obj:
-                _log.debug("DEBUG: Setting background profile")
-                # Set as background profile
-                self.qmc.backgroundprofile = obj
-                self.qmc.backgroundpath = url.toString()
+            if response.status_code != 200:
+                _log.error(f"DEBUG: HTTP error {response.status_code} for URL: {url.toString()}")
+                self.sendmessage(QApplication.translate('Message','Failed to download background profile: HTTP {0}').format(response.status_code))
+                return
                 
-                # Reset line count caches
-                self.qmc.resetlinecountcaches()
-                
-                # Set background as visible
-                self.qmc.background = not self.qmc.hideBgafterprofileload
-                
-                # Time align and redraw
-                self.qmc.timealign(redraw=False)
-                self.qmc.redraw()
-                
-                self.sendmessage(QApplication.translate('Message','Background profile loaded from URL: {0}').format(url.toString()))
-            else:
-                _log.debug("DEBUG: Failed to load profile data")
-                self.sendmessage(QApplication.translate('Message','Failed to load background profile from URL: {0}').format(url.toString()))
-                
-        except Exception as e: # pylint: disable=broad-except
-            _log.exception(f"DEBUG: Exception in loadBackgroundURLSlot: {e}")
-            self.sendmessage(QApplication.translate('Message','Error loading background profile from URL: {0}').format(str(e)))
+            if not response.text.strip():
+                _log.error(f"DEBUG: Empty response from URL: {url.toString()}")
+                self.sendmessage(QApplication.translate('Message','Failed to download background profile: Empty response'))
+                return
+            
+            # Validate that it's valid Python literal 
+            try:
+                import ast
+                ast.literal_eval(response.text)
+                _log.debug("DEBUG: Response contains valid Python literal data")
+            except ast.SyntaxError as e:
+                _log.error(f"DEBUG: Invalid Python literal syntax: {e}")
+                self.sendmessage(QApplication.translate('Message','Failed to parse background profile: Invalid data format'))
+                return
+            
+            # Create temp file
+            temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.alog', delete=False)
+            temp_file.write(response.text)
+            temp_file.close()
+            
+            _log.debug(f"DEBUG: Created temporary file: {temp_file.name}")
+            
+            # Load the temporary file as background
+            self.loadbackground(temp_file.name)
+            
+            # Auto-enable background display
+            self.qmc.background = True
+            _log.debug("DEBUG: Auto-enabled background display")
+            
+            # Store the URL for cold start
+            self.lastLoadedBackground = url.toString()
+            
+            # Clean up temp file after a delay
+            QTimer.singleShot(5000, lambda: self._cleanup_temp_file(temp_file.name))
+            
+            _log.debug("DEBUG: Background profile loaded successfully from URL")
+            self.sendmessage(QApplication.translate('Message','Background profile loaded from URL'))
+            
+        except requests.exceptions.RequestException as e:
+            _log.error(f"DEBUG: Request exception: {e}")
+            self.sendmessage(QApplication.translate('Message','Failed to download background profile: {0}').format(str(e)))
+        except Exception as e:
+            _log.error(f"DEBUG: Unexpected error: {e}")
+            import traceback
+            _log.error(f"DEBUG: Full traceback: {traceback.format_exc()}")
+            self.sendmessage(QApplication.translate('Message','Failed to load background profile: {0}').format(str(e)))
+
+    def _cleanup_temp_file(self, temp_file_path: str) -> None:
+        """Clean up temporary file"""
+        try:
+            import os
+            if os.path.exists(temp_file_path):
+                os.unlink(temp_file_path)
+                _log.debug(f"DEBUG: Cleaned up temporary file: {temp_file_path}")
+        except Exception as e:
+            _log.warning(f"DEBUG: Failed to clean up temp file {temp_file_path}: {e}")
+
+
     # url a QUrl
     # extractor expects the following arguments
     #   url:QUrl
@@ -25922,6 +26146,11 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
                     res = self.setProfile(None, obj) if obj else False
                 except Exception as e: # pylint: disable=broad-except
                     _log.exception(e)
+                    _log.exception(f"DEBUG: Detailed error in importExternalURL for {url.toString()}: {e}")
+                    _log.debug(f"DEBUG: Exception type: {type(e).__name__}")
+                    _log.debug(f"DEBUG: Exception args: {e.args}")
+                    import traceback
+                    _log.debug(f"DEBUG: Full traceback:\n{traceback.format_exc()}")
                 if res:
                     self.orderEvents()
                     #update etypes combo box
@@ -25939,6 +26168,7 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
                     self.sendmessage(message)
                 else:
                     message = QApplication.translate('Message','an error occurred on importing {0}').format(url.toString())
+                    _log.debug(f"DEBUG: Error importing {url.toString()}: {message}")
                     self.sendmessage(message)
 
         except Exception as ex: # pylint: disable=broad-except
@@ -27870,6 +28100,22 @@ def initialize_locale(my_app:Artisan) -> str:
 
     return locale
 
+    # Temporary debug/test code
+    if argv_file.startswith('artisan://'):
+        _log.info(f"DEBUG: Processing artisan URL: {argv_file}")
+        url = QUrl()
+        url.setUrl(argv_file)
+        
+        # Simple test - just print the URL components
+        _log.info(f"DEBUG: URL scheme: {url.scheme()}")
+        _log.info(f"DEBUG: URL authority: {url.authority()}")
+        _log.info(f"DEBUG: URL query: {url.query()}")
+        
+        # Store the URL to process after startup
+        appWindow.pendingURL = url
+        _log.info(f"DEBUG: Stored pending URL: {appWindow.pendingURL.toString()}")
+        # Don't return - let startup continue
+
 def main() -> None:
 
 
@@ -27925,6 +28171,9 @@ def main() -> None:
     try:
         if sys.argv and len(sys.argv) > 1:
             argv_file = str(sys.argv[1])
+        
+            print(f"DEBUG: Processing command line argument: {argv_file}")
+            _log.info(f"DEBUG: Processing command line argument: {argv_file}")
 
             if platform.system() in {'Windows', 'Linux'}:
                 # send argv_file to running instance and exit this one
@@ -27939,7 +28188,23 @@ def main() -> None:
                     url = QUrl()
                     url.setUrl(argv_file)
                     app.open_url(url)
-        
+            else:  # macOS
+                print(f"DEBUG: macOS platform detected")
+                _log.info(f"DEBUG: macOS platform detected")
+                # Handle URLs on macOS
+                if re.match(r'artisan://[roast|profile]',argv_file):
+                    print(f"DEBUG: Processing artisan URL on macOS: {argv_file}")
+                    _log.info(f"DEBUG: Processing artisan URL on macOS: {argv_file}")
+                    url = QUrl()
+                    url.setUrl(argv_file)
+                    app.open_url(url)
+                elif re.match(r'^https?://', argv_file):
+                    print(f"DEBUG: Processing HTTP URL on macOS: {argv_file}")
+                    _log.info(f"DEBUG: Processing HTTP URL on macOS: {argv_file}")
+                    url = QUrl()
+                    url.setUrl(argv_file)
+                    app.open_url(url)
+
             # on Linux (and RPi), local argv_file paths may contain percent encoded spaces %20 and a file:// URL prefix
             if platform.system() == 'Linux':
                 from urllib.parse import unquote_plus
@@ -27980,9 +28245,47 @@ def main() -> None:
                     _log.exception(e)
             else:  #ensure background image aspect ratio is calculated and default weight from last_batchsize is set
                 appWindow.qmc.reset(redraw=False, soundOn=False)
+            # if appWindow.lastLoadedBackground and appWindow.lastLoadedBackground != '' and not appWindow.curFile:
+            #     try:
+            #         appWindow.loadbackground(appWindow.lastLoadedBackground)
+            #         if appWindow.qmc.backgroundpath:
+            #             appWindow.qmc.background = not appWindow.qmc.hideBgafterprofileload
+            #             if not appWindow.lastLoadedProfile and not(appWindow.logofilename != '' and appWindow.logoimgflag):
+            #                 # this extra redraw is not needed if a watermark is loaded as it is triggered by the resize-redraw mechanism
+            #                 appWindow.qmc.timealign(redraw=False)
+            #                 appWindow.autoAdjustAxis(background=appWindow.qmc.background and (not len(appWindow.qmc.timex) > 3))
+            #                 appWindow.qmc.redraw()
+            #             else:
+            #                 appWindow.qmc.timealign(redraw=True,recompute=True)
+            #         else:
+            #             appWindow.lastLoadedProfile = ''
+            #             appWindow.lastLoadedBackground = ''
+            #             appWindow.qmc.background = False
+            #             appWindow.qmc.backgroundprofile = None
+            #             appWindow.qmc.backgroundprofile_moved_x = 0
+            #             appWindow.qmc.backgroundprofile_moved_y = 0
+            #     except Exception as e: # pylint: disable=broad-except
+            #         _log.exception(e)
+            #         appWindow.lastLoadedProfile = ''
+            #         appWindow.lastLoadedBackground = ''
+            #         appWindow.qmc.background = False
+            #         appWindow.qmc.backgroundprofile = None
+            #         appWindow.qmc.backgroundprofile_moved_x = 0
+            #         appWindow.qmc.backgroundprofile_moved_y = 0
+
             if appWindow.lastLoadedBackground and appWindow.lastLoadedBackground != '' and not appWindow.curFile:
                 try:
-                    appWindow.loadbackground(appWindow.lastLoadedBackground)
+                    # Check if it's a URL or local file
+                    if appWindow.lastLoadedBackground.startswith(('http://', 'https://')):
+                        _log.debug(f"DEBUG: Cold start loading background from URL: {appWindow.lastLoadedBackground}")
+                        # Handle URL-based background loading
+                        url = QUrl(appWindow.lastLoadedBackground)
+                        appWindow.loadBackgroundURLSignal.emit(url)
+                    else:
+                        _log.debug(f"DEBUG: Cold start loading background from file: {appWindow.lastLoadedBackground}")
+                        # Handle local file background loading
+                        appWindow.loadbackground(appWindow.lastLoadedBackground)
+                    
                     if appWindow.qmc.backgroundpath:
                         appWindow.qmc.background = not appWindow.qmc.hideBgafterprofileload
                         if not appWindow.lastLoadedProfile and not(appWindow.logofilename != '' and appWindow.logoimgflag):
@@ -28006,7 +28309,7 @@ def main() -> None:
                     appWindow.qmc.background = False
                     appWindow.qmc.backgroundprofile = None
                     appWindow.qmc.backgroundprofile_moved_x = 0
-                    appWindow.qmc.backgroundprofile_moved_y = 0
+                    appWindow.qmc.backgroundprofile_moved_y = 0            
             if not appWindow.lastLoadedBackground and not appWindow.lastLoadedProfile:
                 # redraw once to get geometry right
                 appWindow.qmc.redraw(False)
