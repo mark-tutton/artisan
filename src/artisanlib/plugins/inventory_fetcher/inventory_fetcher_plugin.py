@@ -24,17 +24,17 @@ class InventorySignals(QObject):
     fetch_failed = pyqtSignal(str)  # Error message
 
 class InventoryFetcherPlugin(ArtisanPlugin):
-    """Plugin for fetching beans data from external server with threading support"""
+    """Plugin for fetching beans data from external server via Gateway with threading support"""
     
     @property
     def name(self) -> str:
         """Plugin name - must match what the plugin manager expects"""
-        return "Inventory Fetcher"  # This must match exactly
+        return "Inventory Fetcher"  
     
     @property
     def version(self) -> str:
         """Plugin version"""
-        return "1.0.0"
+        return "2.0.0"
     
     def __init__(self):
         super().__init__()
@@ -56,25 +56,37 @@ class InventoryFetcherPlugin(ArtisanPlugin):
         super().initialize(main_window)
         
         # create fetcher if server URL is configured
-        if self.config.server_url:
-            self.fetcher = InventoryFetcher(
-                server_url=self.config.server_url,
-                api_key=self.config.api_key,
-                timeout=self.config.timeout,
-                auth_type=self.config.auth_type,
-                jwt_token=self.config.jwt_token,
-                use_ssl=self.config.use_ssl,
-                validate_ssl_cert=self.config.validate_ssl_cert
-            )
+        if self.config.get_effective_url():
+            self._create_fetcher()
             
             # auto-fetch on startup if enabled
             if self.config.auto_fetch_on_startup:
                 QTimer.singleShot(1000, self.fetch_beans)
 
+    def _create_fetcher(self):
+        """Create a new fetcher instance, closing any existing one"""
+        # Close existing fetcher to prevent connection leaks
+        if self.fetcher:
+            self.logger.info("Closing existing fetcher to prevent connection leaks")
+            self.fetcher.close()
+            self.fetcher = None
+        
+        # Create new fetcher
+        self.fetcher = InventoryFetcher(self.config)
+        self.logger.info("Created new inventory fetcher with connection pooling")
     
     def cleanup(self) -> None:
         """Cleanup the plugin"""
-        super().cleanup()
+        try:
+            # Close fetcher to prevent connection leaks
+            if self.fetcher:
+                self.logger.info("Cleaning up inventory fetcher")
+                self.fetcher.close()
+                self.fetcher = None
+        except Exception as e:
+            self.logger.error(f"Error during cleanup: {e}")
+        finally:
+            super().cleanup()
     
     def create_menu(self, parent_menu: QMenu) -> QMenu:
         """Create plugin menu items"""
@@ -99,6 +111,13 @@ class InventoryFetcherPlugin(ArtisanPlugin):
         
         plugin_menu.addSeparator()
         
+        # Test connection action
+        test_action = QAction("Test Connection", self.main_window)
+        test_action.triggered.connect(self.test_connection)
+        plugin_menu.addAction(test_action)
+        
+        plugin_menu.addSeparator()
+        
         # About action
         about_action = QAction("About", self.main_window)
         about_action.triggered.connect(self.show_about)
@@ -111,17 +130,9 @@ class InventoryFetcherPlugin(ArtisanPlugin):
         try:
             dialog = InventoryFetcherConfigDialog(self.main_window, self.config)
             if dialog.exec() == QDialog.DialogCode.Accepted:
-                # recreate fetcher with new config
-                if self.config.server_url:
-                    self.fetcher = InventoryFetcher(
-                        server_url=self.config.server_url,
-                        api_key=self.config.api_key,
-                        timeout=self.config.timeout,
-                        auth_type=self.config.auth_type,
-                        jwt_token=self.config.jwt_token,
-                        use_ssl=self.config.use_ssl,
-                        validate_ssl_cert=self.config.validate_ssl_cert
-                    )
+                # recreate fetcher with new config to prevent connection leaks
+                if self.config.get_effective_url():
+                    self._create_fetcher()
                     self.logger.info("Inventory fetcher reconfigured with new settings")
         except Exception as e:
             self._record_error("ConfigDialogError", str(e))
@@ -225,7 +236,6 @@ class InventoryFetcherPlugin(ArtisanPlugin):
         """Populate combo box with beans data"""
         try:
             combo_box.clear()
-            # combo_box.addItem("Select a bean...")
             combo_box.setPlaceholderText("Select/Search from inventory...")
             
             if hasattr(self.main_window, "addmessage"):
@@ -247,7 +257,7 @@ class InventoryFetcherPlugin(ArtisanPlugin):
         """Get selected bean data from combo box"""
         try:
             index = combo_box.currentIndex()
-            if index > 0:  # skip "Select a bean..." item
+            if index >= 0:  # Changed from > 0 to >= 0 since we removed placeholder
                 return combo_box.itemData(index)
             return None
         except Exception as e:
@@ -311,17 +321,19 @@ class InventoryFetcherPlugin(ArtisanPlugin):
             QMessageBox.information(
                 self.main_window,
                 "About Inventory Fetcher",
-                f"<h3>Inventory Fetcher Plugin</h3>"
-                f"<p><b>Version:</b> {self.version}</p>"
-                f"<p>Fetches beans data from external inventory server.</p>"
-                f"<p>Configure the server URL and API key in the plugin settings.</p>"
+                f"<h3>Inventory Fetcher Plugin v{self.version}</h3>"
+                f"<p>Fetches beans data from external inventory server via Gateway.</p>"
+                f"<p><b>Gateway Mode:</b> {self.config.use_gateway}</p>"
+                f"<p><b>Gateway URL:</b> {self.config.gateway_url}</p>"
+                f"<p><b>Auth Type:</b> {self.config.gateway_auth_type}</p>"
+                f"<p>Configure the gateway URL and authentication in the plugin settings.</p>"
             )
         except Exception as e:
             self._record_error("AboutDialogError", str(e))
             self.logger.error(f"Error showing about dialog: {e}")
 
     def test_connection(self):
-        """Test connection to server with JWT validation"""
+        """Test connection to server with Gateway validation"""
         if not self.fetcher:
             QMessageBox.warning(self.main_window, "Warning", "Please configure server URL first!")
             return
@@ -329,15 +341,17 @@ class InventoryFetcherPlugin(ArtisanPlugin):
         try:
             # Test basic connection
             if self.fetcher.test_connection():
-                # If using JWT, also validate the token
-                if self.config.auth_type in ["jwt", "bearer"] and self.config.jwt_token:
+                # If using gateway with JWT, also validate the token
+                if (self.config.use_gateway and 
+                    self.config.gateway_auth_type in ["jwt", "google"] and 
+                    self.config.jwt_token):
                     validation_result = self.fetcher.validate_jwt_token()
                     if validation_result.get("valid"):
                         QMessageBox.information(self.main_window, "Success", 
-                            "Connection successful and JWT token is valid!")
+                            "Gateway connection successful and JWT token is valid!")
                     else:
                         QMessageBox.warning(self.main_window, "Warning", 
-                            f"Connection successful but JWT token validation failed: {validation_result.get('error')}")
+                            f"Gateway connection successful but JWT token validation failed: {validation_result.get('error')}")
                 else:
                     QMessageBox.information(self.main_window, "Success", "Connection successful!")
             else:
@@ -358,14 +372,18 @@ class InventoryFetcherPlugin(ArtisanPlugin):
                 "has_errors": self.has_errors,
                 "error_count": len(self.errors),
                 "fetcher_configured": self.fetcher is not None,
+                "fetcher_closed": self.fetcher._closed if self.fetcher else None,
                 "beans_count": len(self.beans_data),
                 "fetch_in_progress": self._fetch_in_progress,
                 "last_fetch_time": self._last_fetch_time,
-                "server_url": self.config.server_url if self.config else None,
-                "auth_type": self.config.auth_type if self.config else "none",
-                "jwt_configured": bool(self.config.jwt_token) if self.config else False,
-                "use_ssl": self.config.use_ssl if self.config else False,
-                "auto_fetch_enabled": self.config.auto_fetch_on_startup if self.config else False,
+                "use_gateway": self.config.use_gateway,
+                "gateway_url": self.config.gateway_url,
+                "gateway_auth_type": self.config.gateway_auth_type,
+                "server_url": self.config.server_url if not self.config.use_gateway else None,
+                "auth_type": self.config.auth_type if not self.config.use_gateway else self.config.gateway_auth_type,
+                "jwt_configured": bool(self.config.jwt_token),
+                "use_ssl": self.config.use_ssl,
+                "auto_fetch_enabled": self.config.auto_fetch_on_startup,
                 "worker_thread_running": self._worker_thread.isRunning() if self._worker_thread else False,
                 "recent_errors": [
                     {
@@ -377,8 +395,8 @@ class InventoryFetcherPlugin(ArtisanPlugin):
                 ]
             }
             
-            # Add JWT validation status if applicable
-            if self.fetcher and self.config.auth_type in ["jwt", "bearer"]:
+            # Add JWT validation status 
+            if self.fetcher and self.config.use_gateway and self.config.gateway_auth_type in ["jwt", "google"]:
                 try:
                     validation_result = self.fetcher.validate_jwt_token()
                     status["jwt_valid"] = validation_result.get("valid", False)
@@ -413,7 +431,3 @@ class InventoryFetcherPlugin(ArtisanPlugin):
             self.logger.error(f"Inventory fetch operation failed in worker thread: {error_message}")
             # Schedule the failure handler in the main thread
             QTimer.singleShot(0, lambda: self._on_fetch_failed(error_message))
-
-
-
-

@@ -1206,7 +1206,7 @@ class VMToolbar(NavigationToolbar): # pylint: disable=abstract-method
                 _log.debug("Inventory fetcher plugin not available")
             
             if status and status.get('plugin_loaded', False):
-                if status.get('is_connected', False):
+                if status.get('connected', False):
                     # Check authentication status
                     auth_status = status.get('auth_status', 'unknown')
                     if auth_status in ['jwt_valid', 'api_token', 'legacy_api_key']:

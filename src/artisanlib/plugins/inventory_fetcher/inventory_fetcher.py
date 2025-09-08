@@ -4,74 +4,70 @@ import logging
 import time
 from typing import Dict, List, Optional, Any
 from threading import Lock
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 _log = logging.getLogger(__name__)
 
+
 class InventoryFetcher:
-    """Fetches beans data from external server with JWT authentication and thread safety"""
-    
-    def __init__(self, server_url: str, api_key: Optional[str] = None, timeout: int = 30,
-        auth_type: str = "none", jwt_token: Optional[str] = None,
-    use_ssl: bool = False, validate_ssl_cert: bool = True):
-        self.server_url = server_url.rstrip('/')
-        self.api_key = api_key
-        self.timeout = timeout
-        self.auth_type = auth_type
-        self.jwt_token = jwt_token
-        self.use_ssl = use_ssl
-        self.validate_ssl_cert = validate_ssl_cert
-        
-        # Create session with proper SSL configuration
+    """Fetches beans data from external server via Gateway with JWT authentication and thread safety"""
+
+    def __init__(self, config):
+        self.config = config
+        self.timeout = config.timeout
+        self.use_ssl = config.use_ssl
+        self.validate_ssl_cert = config.validate_ssl_cert
+
         self.session = requests.Session()
+
+        adapter = HTTPAdapter(
+            pool_connections=1,
+            pool_maxsize=1,  
+            max_retries=Retry(total=3, backoff_factor=0.3, status_forcelist=[500, 502, 504]),
+        )
+
+        self.session.mount("http://", adapter)
+        self.session.mount("https://", adapter)
+
         if not self.validate_ssl_cert:
             self.session.verify = False
             import urllib3
+
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        
+
         # Thread safety
         self._lock = Lock()
         self._last_request_time = 0
         self._min_request_interval = 0.1  # Minimum 100ms between requests
-        
+        self._closed = False
+
         # Set up headers
         self._setup_headers()
 
+        _log.debug("InventoryFetcher initialized with connection pooling")
+
     def _setup_headers(self):
         """Setup authentication headers based on config"""
-        headers = {'Content-Type': 'application/json'}
-        
-        if self.auth_type == "api_token" and self.api_key:
-            headers["X-API-Key"] = self.api_key
-        elif self.auth_type in ["jwt", "bearer"] and self.jwt_token:
-            headers["Authorization"] = f"Bearer {self.jwt_token}"
-        
-        self.session.headers.update(headers)
-        _log.debug(f"Setup headers for auth type: {self.auth_type}")
+        if self._closed:
+            return
 
-    def _get_auth_headers(self) -> Dict[str, str]:
-        """Get authentication headers for requests"""
-        headers = {}
-        
-        # Check if we have a JWT token first
-        if self.jwt_token and self.jwt_token.strip():
-            # JWT token
-            headers["Authorization"] = f"Bearer {self.jwt_token.strip()}"
-            _log.debug("Using JWT Bearer authentication")
-        elif self.auth_type == "api_token" and self.api_key:
-            headers["X-API-Key"] = self.api_key.strip()
-            _log.debug("Using API key authentication")
-        elif self.auth_type in ["jwt", "bearer"] and self.jwt_token:
-            headers["Authorization"] = f"Bearer {self.jwt_token.strip()}"
-            _log.debug("Using JWT Bearer authentication")
-        elif self.auth_type == "none" and self.api_key and not self.jwt_token:
-            # Legacy mode - only use API key if no JWT token is present
-            headers["X-API-Key"] = self.api_key.strip()
-            _log.debug("Using legacy API key authentication")
-        
-        return headers
+        headers = {"Content-Type": "application/json"}
+
+        # Get auth headers from config
+        auth_headers = self.config.get_auth_headers()
+        headers.update(auth_headers)
+
+        self.session.headers.update(headers)
+        _log.debug(
+            f"Setup headers for gateway: {self.config.use_gateway}, auth_type: {self.config.gateway_auth_type}"
+        )
 
     def _rate_limit(self):
         """Rate limiting to prevent overwhelming the server"""
+        if self._closed:
+            raise Exception("Fetcher is closed")
+
         current_time = time.time()
         time_since_last = current_time - self._last_request_time
         if time_since_last < self._min_request_interval:
@@ -80,180 +76,218 @@ class InventoryFetcher:
 
     def _build_url(self, endpoint: str) -> str:
         """Build full URL with proper protocol"""
-        # Check if server_url already has a protocol
-        if self.server_url.startswith(('http://', 'https://')):
-            # Server URL already has protocol, just add endpoint
-            return f"{self.server_url.rstrip('/')}{endpoint}"
+        if self._closed:
+            raise Exception("Fetcher is closed")
+
+        base_url = self.config.get_effective_url()
+
+        # Check if base_url already has a protocol
+        if base_url.startswith(("http://", "https://")):
+            # Base URL already has protocol, just add endpoint
+            return f"{base_url.rstrip('/')}{endpoint}"
         else:
             # No protocol specified, add default
             protocol = "https" if self.use_ssl else "http"
-            return f"{protocol}://{self.server_url.rstrip('/')}{endpoint}"
+            return f"{protocol}://{base_url.rstrip('/')}{endpoint}"
 
     def fetch_beans(self, limit: int = 1000, offset: int = 0) -> Dict[str, Any]:
         """Fetch beans from server with pagination support and thread safety"""
+        if self._closed:
+            raise Exception("Fetcher is closed")
+
         with self._lock:
             try:
                 self._rate_limit()
-                
+
                 # Build URL with pagination parameters
-                url = self._build_url("/api/inventory")
-                params = {
-                    'limit': limit,
-                    'offset': offset
-                }
-                
-                # Only add API key as query parameter for legacy auth when no JWT token
-                if (self.auth_type == "none" and self.api_key and 
-                    not self.jwt_token and not self.jwt_token.strip()):
-                    params['api_key'] = self.api_key.strip()
-                    _log.debug("Added API key to URL parameters (legacy mode)")
-                
+                if self.config.use_gateway:
+                    # Use gateway route
+                    url = self._build_url("/api/inventory")
+                else:
+                    # Direct connection to inventory service
+                    url = self._build_url("/api/inventory")
+
+                params = {"limit": limit, "offset": offset}
+
                 _log.info(f"Fetching beans from: {url} (limit: {limit}, offset: {offset})")
-                _log.debug(f"Auth type: {self.auth_type}, JWT token: {bool(self.jwt_token)}, API key: {bool(self.api_key)}")
-                
-                headers = self._get_auth_headers()
-                response = self.session.get(url, params=params, timeout=self.timeout, headers=headers)
+                _log.debug(
+                    f"Gateway mode: {self.config.use_gateway}, Auth type: {self.config.gateway_auth_type}"
+                )
+
+                response = self.session.get(url, params=params, timeout=self.timeout)
                 response.raise_for_status()
-                
+
                 data = response.json()
-                beans = data.get('data', [])
-                total_count = data.get('total', len(beans))
-                
-                _log.info(f"Successfully fetched {len(beans)} beans (total available: {total_count})")
+                beans = data.get("data", [])
+                total_count = data.get("total", len(beans))
+
+                _log.info(
+                    f"Successfully fetched {len(beans)} beans (total available: {total_count})"
+                )
                 return {
-                    'data': beans,
-                    'total': total_count,
-                    'limit': limit,
-                    'offset': offset,
-                    'has_more': offset + limit < total_count
+                    "data": beans,
+                    "total": total_count,
+                    "limit": limit,
+                    "offset": offset,
+                    "has_more": offset + limit < total_count,
                 }
-                
+
             except requests.exceptions.RequestException as e:
                 _log.error(f"Failed to fetch beans: {e}")
                 raise Exception(f"Failed to fetch beans: {e}")
 
     def fetch_all_beans(self, batch_size: int = 1000) -> List[Dict[str, Any]]:
         """Fetch all beans using pagination with progress tracking"""
+        if self._closed:
+            raise Exception("Fetcher is closed")
+
         all_beans = []
         offset = 0
-        
+
         try:
             # Get first batch to determine total count
             first_result = self.fetch_beans(limit=batch_size, offset=0)
-            total_count = first_result['total']
-            all_beans.extend(first_result['data'])
-            
+            total_count = first_result["total"]
+            all_beans.extend(first_result["data"])
+
             _log.info(f"Starting batch fetch: {total_count} total beans, batch size: {batch_size}")
-            
+
             # Continue fetching remaining batches
-            while first_result['has_more']:
+            while first_result["has_more"]:
                 offset += batch_size
                 result = self.fetch_beans(limit=batch_size, offset=offset)
-                beans = result['data']
+                beans = result["data"]
                 all_beans.extend(beans)
-                
-                _log.info(f"Fetched batch {len(beans)} beans, total so far: {len(all_beans)}/{total_count}")
-                
-                if not result['has_more']:
+
+                _log.info(
+                    f"Fetched batch {len(beans)} beans, total so far: {len(all_beans)}/{total_count}"
+                )
+
+                if not result["has_more"]:
                     break
-            
+
             _log.info(f"Completed batch fetch: {len(all_beans)} beans from server")
             return all_beans
-            
+
         except Exception as e:
             _log.error(f"Error during batch fetch: {e}")
             raise
-    
+
     def fetch_bean_details(self, bean_id: str) -> Dict[str, Any]:
         """Fetch specific bean details with thread safety"""
+        if self._closed:
+            raise Exception("Fetcher is closed")
+
         with self._lock:
             try:
                 self._rate_limit()
-                
-                # Build URL with API key as query parameter
-                url = self._build_url(f"/api/inventory/{bean_id}")
-                params = {}
-                
-                # Only add API key as query parameter for legacy auth when no JWT token
-                if (self.auth_type == "none" and self.api_key and 
-                    not self.jwt_token and not self.jwt_token.strip()):
-                    params['api_key'] = self.api_key.strip()
-                    _log.debug("Added API key to URL parameters (legacy mode)")
-                
-                headers = self._get_auth_headers()
-                response = self.session.get(url, params=params, timeout=self.timeout, headers=headers)
+
+                # Build URL
+                if self.config.use_gateway:
+                    url = self._build_url(f"/api/inventory/{bean_id}")
+                else:
+                    url = self._build_url(f"/api/inventory/{bean_id}")
+
+                response = self.session.get(url, timeout=self.timeout)
                 response.raise_for_status()
-                
+
                 data = response.json()
-                return data.get('data', {})
-                
+                return data.get("data", {})
+
             except requests.exceptions.RequestException as e:
                 _log.error(f"Failed to fetch bean details: {e}")
                 raise Exception(f"Failed to fetch bean details: {e}")
-    
+
     def test_connection(self) -> bool:
         """Test connection to server with thread safety"""
+        if self._closed:
+            return False
+
         with self._lock:
             try:
                 self._rate_limit()
-                url = self._build_url("/api/health")
-                headers = self._get_auth_headers()
-                
-                response = self.session.get(url, timeout=self.timeout, headers=headers)
+
+                if self.config.use_gateway:
+                    # Test gateway health endpoint
+                    url = self._build_url("/gateway/health")
+                else:
+                    # Test direct service health endpoint
+                    url = self._build_url("/api/health")
+
+                response = self.session.get(url, timeout=self.timeout)
                 return response.status_code == 200
             except Exception as e:
                 _log.debug(f"Connection test failed: {e}")
                 return False
-    
+
     def get_server_info(self) -> Dict[str, Any]:
         """Get server information and status"""
+        if self._closed:
+            return {"error": "Fetcher is closed"}
+
         with self._lock:
             try:
                 self._rate_limit()
-                url = self._build_url("/api/info")
-                headers = self._get_auth_headers()
-                
-                response = self.session.get(url, timeout=self.timeout, headers=headers)
+
+                if self.config.use_gateway:
+                    url = self._build_url("/gateway/routes")
+                else:
+                    url = self._build_url("/api/info")
+
+                response = self.session.get(url, timeout=self.timeout)
                 if response.status_code == 200:
                     return response.json()
                 else:
                     return {"error": f"Server returned status {response.status_code}"}
             except Exception as e:
                 return {"error": f"Failed to get server info: {e}"}
-    
+
     def validate_jwt_token(self) -> Dict[str, Any]:
         """Validate JWT token if configured"""
-        if not self.jwt_token or self.auth_type not in ["jwt", "bearer"]:
+        if self._closed:
+            return {"valid": False, "error": "Fetcher is closed"}
+
+        if not self.config.jwt_token or self.config.gateway_auth_type not in ["jwt", "google"]:
             return {"valid": False, "error": "No JWT token configured"}
-        
+
         try:
             self._rate_limit()
-            url = self._build_url("/api/auth/validate")
-            headers = self._get_auth_headers()
-            
-            response = self.session.post(url, timeout=self.timeout, headers=headers)
+
+            if self.config.use_gateway:
+                # Use gateway auth validation endpoint
+                url = self._build_url("/api/auth/validate")
+            else:
+                url = self._build_url("/api/auth/validate")
+
+            response = self.session.post(url, timeout=self.timeout)
             if response.status_code == 200:
                 return {"valid": True, "data": response.json()}
             else:
                 return {"valid": False, "error": f"Validation failed: {response.status_code}"}
         except Exception as e:
             return {"valid": False, "error": f"Validation error: {e}"}
-    
+
     def refresh_jwt_token(self) -> bool:
         """Attempt to refresh JWT token"""
-        if not self.jwt_token or self.auth_type not in ["jwt", "bearer"]:
+        if self._closed:
             return False
-        
+
+        if not self.config.jwt_token or self.config.gateway_auth_type not in ["jwt", "google"]:
+            return False
+
         try:
             self._rate_limit()
-            url = self._build_url("/api/auth/refresh")
-            headers = self._get_auth_headers()
-            
-            response = self.session.post(url, timeout=self.timeout, headers=headers)
+
+            if self.config.use_gateway:
+                url = self._build_url("/api/auth/refresh")
+            else:
+                url = self._build_url("/api/auth/refresh")
+
+            response = self.session.post(url, timeout=self.timeout)
             if response.status_code == 200:
                 data = response.json()
-                if 'token' in data:
-                    self.jwt_token = data['token']
+                if "token" in data:
+                    self.config.jwt_token = data["token"]
                     self._setup_headers()
                     _log.info("JWT token refreshed successfully")
                     return True
@@ -261,12 +295,105 @@ class InventoryFetcher:
         except Exception as e:
             _log.error(f"Failed to refresh JWT token: {e}")
             return False
-    
+
+    def authenticate_with_gateway(self) -> Dict[str, Any]:
+        """Authenticate with gateway using configured method"""
+        if self._closed:
+            return {"success": False, "error": "Fetcher is closed"}
+
+        try:
+            self._rate_limit()
+
+            if self.config.gateway_auth_type == "google":
+                # For Google OAuth, the JWT token should already be obtained
+                # This method would typically be called after OAuth flow
+                return {"success": True, "message": "Google OAuth token configured"}
+
+            elif self.config.gateway_auth_type == "api_key":
+                # Test API key authentication
+                url = self._build_url("/api/auth/test")
+                headers = {"X-API-Key": self.config.gateway_api_key}
+
+                response = self.session.get(url, headers=headers, timeout=self.timeout)
+                if response.status_code == 200:
+                    return {"success": True, "message": "API key authentication successful"}
+                else:
+                    return {
+                        "success": False,
+                        "error": f"API key authentication failed: {response.status_code}",
+                    }
+
+            elif self.config.gateway_auth_type == "jwt":
+                # Test JWT authentication
+                return self.validate_jwt_token()
+
+            else:
+                return {
+                    "success": False,
+                    "error": f"Unsupported auth type: {self.config.gateway_auth_type}",
+                }
+
+        except Exception as e:
+            return {"success": False, "error": f"Authentication error: {e}"}
+
     def close(self):
         """Close the session and cleanup resources"""
+        if self._closed:
+            return
+
         try:
+            self._closed = True
             if self.session:
                 self.session.close()
                 _log.debug("Inventory fetcher session closed")
         except Exception as e:
             _log.error(f"Error closing inventory fetcher session: {e}")
+
+    def __del__(self):
+        """Destructor to ensure cleanup"""
+        self.close()
+
+    def __enter__(self):
+        """Context manager entry"""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit"""
+        self.close()
+
+    @property
+    def is_closed(self) -> bool:
+        """Check if fetcher is closed"""
+        return self._closed
+
+    def get_connection_info(self) -> Dict[str, Any]:
+        """Get connection information without making new connections"""
+        if self._closed:
+            return {"status": "closed", "message": "Fetcher is closed"}
+
+        try:
+            adapter = self.session.get_adapter("http://")
+            pool_info = {}
+            if adapter:
+                pool_info = {
+                    "pool_connections": getattr(adapter, "config", {}).get(
+                        "pool_connections", "unknown"
+                    ),
+                    "pool_maxsize": getattr(adapter, "config", {}).get("pool_maxsize", "unknown"),
+                    "pool_block": getattr(adapter, "config", {}).get("pool_block", "unknown"),
+                }
+
+            return {
+                "status": "active",
+                "closed": self._closed,
+                "session_closed": self.session.closed if hasattr(self.session, "closed") else False,
+                "pool_info": pool_info,
+                "server_url": self.config.get_effective_url(),
+                "auth_type": (
+                    self.config.gateway_auth_type
+                    if self.config.use_gateway
+                    else self.config.auth_type
+                ),
+            }
+        except Exception as e:
+            return {"status": "error", "message": str(e)}

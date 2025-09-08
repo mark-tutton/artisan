@@ -213,11 +213,18 @@ def refresh_inventory(roast_properties_dialog, inventory_plugin):
 def _refresh_inventory_safe(roast_properties_dialog, inventory_plugin):
     """Safely refresh inventory in main thread"""
     try:
-        if hasattr(inventory_plugin, "execute_in_worker"):
-            inventory_plugin.execute_in_worker("refresh_inventory", inventory_plugin.fetch_beans)
+        # Check if plugin already has data before fetching
+        existing_data = inventory_plugin.get_beans_data()
+        if not existing_data:
+            # Only fetch if no data
+            if hasattr(inventory_plugin, "execute_in_worker"):
+                inventory_plugin.execute_in_worker("refresh_inventory", inventory_plugin.fetch_beans)
+            else:
+                # Fallback to direct call
+                inventory_plugin.fetch_beans()
         else:
-            # Fallback to direct call
-            inventory_plugin.fetch_beans()
+            # Use existing data
+            _log.info(f"Using existing inventory data ({len(existing_data)} items)")
 
         # Populate the combo box
         if hasattr(roast_properties_dialog, "inventory_combo"):
