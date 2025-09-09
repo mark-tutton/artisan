@@ -20247,6 +20247,7 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
         start_time = libtime.process_time()
         try:
             if filename is None:
+                # self.settingsSetValue(settings, default_settings, 'fullscreen', self.full_screen_mode_active, read_defaults) # prevent fullscreen from being saved as default    
                 self.settingsSetValue(settings, default_settings, 'fullscreen', self.full_screen_mode_active or self.isFullScreen(), read_defaults)
                 self.settingsSetValue(settings, default_settings, 'plus_account', self.plus_account, read_defaults)
                 self.settingsSetValue(settings, default_settings, 'plus_remember_credentials', self.plus_remember_credentials, read_defaults)
