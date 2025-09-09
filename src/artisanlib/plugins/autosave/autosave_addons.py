@@ -41,7 +41,7 @@ class ServerHealthChecker(QObject):
     def _check_server_health(self) -> None:
         """Check if the server is responsive"""
         try:
-            health_url = f"{self.config.autosave_server_url}/health"
+            health_url = self.config.autosave_health_url
             _log.debug(f"🔍 Checking server health at: {health_url}")
 
             response = requests.get(
@@ -50,9 +50,9 @@ class ServerHealthChecker(QObject):
                 headers=self._get_auth_headers(),
             )
 
-            _log.debug(f"📡 Health check response: {response.status_code}")
+            _log.debug(f"Health check response: {response.status_code}")
             if response.status_code == 200:
-                _log.debug(f"📄 Response content: {response.text[:200]}...")
+                _log.debug(f"Response content: {response.text[:200]}...")
 
                 try:
                     health_data = response.json()
@@ -62,30 +62,30 @@ class ServerHealthChecker(QObject):
                         if not self.is_healthy:
                             self.is_healthy = True
                             self.health_status_changed.emit(True)
-                            _log.info("✅ Server health check passed - server reports healthy")
+                            _log.info("Server health check passed - server reports healthy")
                     else:
                         if self.is_healthy:
                             self.is_healthy = False
                             self.health_status_changed.emit(False)
-                            _log.warning(f"⚠️ Server reports unhealthy status: {server_status}")
+                            _log.warning(f"Server reports unhealthy status: {server_status}")
                 except (ValueError, KeyError) as e:
-                    _log.warning(f"⚠️ Could not parse health response: {e}")
+                    _log.warning(f"Could not parse health response: {e}")
                     if not self.is_healthy:
                         self.is_healthy = True
                         self.health_status_changed.emit(True)
-                        _log.info("✅ Server health check passed (status code only)")
+                        _log.info("Server health check passed (status code only)")
             else:
                 if self.is_healthy:
                     self.is_healthy = False
                     self.health_status_changed.emit(False)
-                    _log.warning(f"⚠️ Server health check failed: {response.status_code}")
+                    _log.warning(f"Server health check failed: {response.status_code}")
 
         except requests.exceptions.RequestException as e:
             if self.is_healthy:
                 self.is_healthy = False
                 self.health_status_changed.emit(False)
                 self.connection_error.emit(str(e))
-                _log.error(f"❌ Server health check error: {e}")
+                _log.error(f"Server health check error: {e}")
 
         self.last_check = time.time()
 
@@ -105,7 +105,7 @@ class ServerHealthChecker(QObject):
     def upload_file(self, file_path: str, file_type: str) -> bool:
         """Upload a file to the server with retry logic"""
         if not self.is_healthy:
-            _log.warning("⚠️ Skipping upload - server is not healthy")
+            _log.warning("Skipping upload - server is not healthy")
             return False
 
         for attempt in range(self.config.autosave_retry_attempts):
@@ -118,44 +118,44 @@ class ServerHealthChecker(QObject):
                         "timestamp": str(int(time.time())),
                     }
 
-                    _log.info(f"📤 Attempting upload {attempt + 1}: {file_path}")
-                    _log.info(f"📤 Upload URL: {self.config.autosave_server_url}/files/upload")
-                    _log.info(f"📤 File type: {file_type}")
-                    _log.info(f"📤 Data: {data}")
+                    _log.info(f"Attempting upload {attempt + 1}: {file_path}")
+                    _log.info(f"Upload URL: {self.config.autosave_server_url}")
+                    _log.info(f"File type: {file_type}")
+                    _log.info(f"Data: {data}")
 
                     headers = self._get_auth_headers()
                     if "Content-Type" in headers:
                         del headers["Content-Type"]
 
                     response = requests.post(
-                        f"{self.config.autosave_server_url}/files/upload",
+                        self.config.autosave_server_url,
                         files=files,
                         data=data,
                         timeout=self.config.autosave_connection_timeout,
                         headers=headers,
                     )
 
-                    _log.info(f"�� Response status: {response.status_code}")
-                    _log.info(f"📥 Response headers: {dict(response.headers)}")
-                    _log.info(f"📥 Response body: {response.text[:500]}")
+                    _log.info(f"Response status: {response.status_code}")
+                    _log.info(f"Response headers: {dict(response.headers)}")
+                    _log.info(f"Response body: {response.text[:500]}")
 
                     if response.status_code == 200:
-                        _log.info(f"✅ File uploaded successfully: {file_path}")
+                        _log.info(f"File uploaded successfully: {file_path}")
                         return True
                     else:
                         _log.warning(
-                            f"⚠️ Upload failed (attempt {attempt + 1}): {response.status_code}"
+                            f"Upload failed (attempt {attempt + 1}): {response.status_code}"
                         )
-                        _log.warning(f"⚠️ Response body: {response.text}")
+                        _log.warning(f"Response body: {response.text}")
 
             except requests.exceptions.RequestException as e:
-                _log.error(f"❌ Upload error (attempt {attempt + 1}): {e}")
+                _log.error(f"Upload error (attempt {attempt + 1}): {e}")
 
             if attempt < self.config.autosave_retry_attempts - 1:
                 time.sleep(self.config.autosave_retry_delay)
 
         _log.error(
-            f"❌ File upload failed after {self.config.autosave_retry_attempts} attempts: {file_path}"
+            f"File upload failed after {self.config.autosave_retry_attempts} attempts: {file_path}"
         )
         return False
 
@@ -184,11 +184,12 @@ def save_config() -> bool:
     return _config.save_to_file()
 
 
-def get_server_upload_values(uploadToServerCheckbox, serverUrlEdit):
+def get_server_upload_values(uploadToServerCheckbox, serverUrlEdit, serverHealthUrlEdit):
     """Get the values from server upload widgets"""
     return {
         "autosave_upload_to_server": uploadToServerCheckbox.isChecked(),
         "autosave_server_url": serverUrlEdit.text(),
+        "autosave_health_url": serverHealthUrlEdit.text(),
     }
 
 
@@ -216,12 +217,23 @@ def apply_server_upload_values(aw, values):
 def integrate_with_automaticsave(aw):
     """Integrate the plugin with the existing automaticsave method"""
     try:
+        _log.info("AUTOSAVE PLUGIN DEBUG - Starting integration with automaticsave")
+        
         health_checker = get_health_checker()
+        _log.info(f"AUTOSAVE PLUGIN DEBUG - Health checker status: {health_checker.is_healthy}")
+        _log.info(f"AUTOSAVE PLUGIN DEBUG - Server URL: {_config.autosave_server_url}")
+        _log.info(f"AUTOSAVE PLUGIN DEBUG - Health URL: {_config.autosave_health_url}")
+        _log.info(f"AUTOSAVE PLUGIN DEBUG - Upload enabled: {_config.autosave_upload_to_server}")
 
         def enhanced_upload_to_server(filepath: str, server_url: str, extra_params: dict = None):
             """Enhanced upload method with health checking and retry logic"""
+            _log.info(f"AUTOSAVE PLUGIN DEBUG - Enhanced upload called for: {filepath}")
+            _log.info(f"AUTOSAVE PLUGIN DEBUG - Server URL: {server_url}")
+            _log.info(f"AUTOSAVE PLUGIN DEBUG - Extra params: {extra_params}")
+            _log.info(f"AUTOSAVE PLUGIN DEBUG - Health checker status: {health_checker.is_healthy}")
+            
             if not health_checker.is_healthy:
-                _log.warning(f"⚠️ Skipping upload - server is not healthy: {filepath}")
+                _log.warning(f"AUTOSAVE PLUGIN DEBUG - Skipping upload - server is not healthy: {filepath}")
                 return None
 
             success = health_checker.upload_file(
@@ -229,31 +241,36 @@ def integrate_with_automaticsave(aw):
             )
 
             if success:
-                _log.info(f"✅ File uploaded successfully via plugin: {filepath}")
+                _log.info(f"AUTOSAVE PLUGIN DEBUG - File uploaded successfully via plugin: {filepath}")
                 return True
             else:
-                _log.error(f"❌ File upload failed via plugin: {filepath}")
+                _log.error(f"AUTOSAVE PLUGIN DEBUG - File upload failed via plugin: {filepath}")
                 return None
 
         aw.upload_to_server = enhanced_upload_to_server
-
-        _log.info("✅ Plugin integrated with automaticsave method")
+        _log.info("AUTOSAVE PLUGIN DEBUG - Plugin integrated with automaticsave method")
 
     except Exception as e:
-        _log.error(f"❌ Failed to integrate with automaticsave: {e}")
-
+        _log.error(f"AUTOSAVE PLUGIN DEBUG - Failed to integrate with automaticsave: {e}")
 
 def should_upload_to_server(aw) -> bool:
     """Check if server upload is enabled and server is healthy"""
     try:
-        if not getattr(aw.qmc, "autosave_upload_to_server", False):
+        upload_enabled = getattr(aw.qmc, "autosave_upload_to_server", False)
+        _log.info(f"AUTOSAVE PLUGIN DEBUG - Upload enabled check: {upload_enabled}")
+        
+        if not upload_enabled:
+            _log.info(f"AUTOSAVE PLUGIN DEBUG - Upload disabled in qmc")
             return False
 
         health_checker = get_health_checker()
-        return health_checker.is_healthy
+        is_healthy = health_checker.is_healthy
+        _log.info(f"AUTOSAVE PLUGIN DEBUG - Health checker status: {is_healthy}")
+        
+        return is_healthy
 
     except Exception as e:
-        _log.error(f"❌ Error checking upload status: {e}")
+        _log.error(f"AUTOSAVE PLUGIN DEBUG - Error checking upload status: {e}")
         return False
 
 
@@ -272,7 +289,11 @@ def create_server_upload_widgets(aw):
     
     # Create the server URL input
     serverUrlEdit = QLineEdit(_config.autosave_server_url)
-    serverUrlEdit.setPlaceholderText("http://localhost:4000")
+    serverUrlEdit.setPlaceholderText("http://localhost:5101/api/files/upload")
+
+    # Create the server health URL input
+    serverHealthUrlEdit = QLineEdit(_config.autosave_health_url)
+    serverHealthUrlEdit.setPlaceholderText("http://localhost:5101/api/files/health")
 
     # Create authentication type selector
     authTypeLabel = QLabel(QApplication.translate("Label", "Authentication:"))
@@ -330,7 +351,7 @@ def create_server_upload_widgets(aw):
                 else:
                     statusIndicator.setText("❌ Disconnected")
                     statusIndicator.setStyleSheet("color: red; font-weight: bold;")
-                _log.info(f"🔄 Server status updated: {'Connected' if is_healthy else 'Disconnected'}")
+                _log.info(f"Server status updated: {'Connected' if is_healthy else 'Disconnected'}")
             else:
                 _log.debug("Status indicator widget no longer exists, skipping update")
         except RuntimeError as e:
@@ -339,14 +360,13 @@ def create_server_upload_widgets(aw):
     def on_connection_error(error_msg):
         try:
             if statusIndicator and statusIndicator.parent() is not None:
-                statusIndicator.setText(f"❌ Error: {error_msg[:30]}...")
+                statusIndicator.setText(f"Error: {error_msg[:30]}...")
                 statusIndicator.setStyleSheet("color: red; font-weight: bold;")
-                _log.error(f"🔴 Connection error: {error_msg}")
+                _log.error(f"Connection error: {error_msg}")
             else:
                 _log.debug("Status indicator widget no longer exists, skipping error update")
         except RuntimeError as e:
             _log.debug(f"Status indicator widget was destroyed: {e}")
-
 
     # Connect the signals
     health_checker.health_status_changed.connect(on_health_status_changed)
@@ -365,6 +385,8 @@ def create_server_upload_widgets(aw):
     layout.addWidget(uploadToServerCheckbox)
     layout.addWidget(QLabel(QApplication.translate("Label", "Server URL:")))
     layout.addWidget(serverUrlEdit)
+    layout.addWidget(QLabel(QApplication.translate("Label", "Server Health URL:")))
+    layout.addWidget(serverHealthUrlEdit)
     layout.addWidget(authTypeLabel)
     layout.addWidget(authTypeCombo)
     layout.addWidget(apiTokenLabel)
@@ -384,6 +406,7 @@ def create_server_upload_widgets(aw):
     # Store references
     group_box.uploadToServerCheckbox = uploadToServerCheckbox
     group_box.serverUrlEdit = serverUrlEdit
+    group_box.serverHealthUrlEdit = serverHealthUrlEdit
     group_box.authTypeCombo = authTypeCombo
     group_box.apiTokenEdit = apiTokenEdit
     group_box.jwtTokenEdit = jwtTokenEdit
@@ -401,7 +424,6 @@ def create_server_upload_widgets(aw):
             _log.debug(f"Error disconnecting signals: {e}")
 
     group_box.destroyed.connect(cleanup_connections)
-
 
     # Trigger initial health check after a short delay
     QTimer.singleShot(1000, trigger_health_check)
@@ -463,6 +485,7 @@ def save_widget_values_to_config(
     # Update config with widget values
     _config.autosave_upload_to_server = uploadGroupBox.uploadToServerCheckbox.isChecked()
     _config.autosave_server_url = uploadGroupBox.serverUrlEdit.text()
+    _config.autosave_health_url = uploadGroupBox.serverHealthUrlEdit.text()
 
     # Map auth type from combo box
     auth_type_map = {0: "none", 1: "api_token", 2: "jwt", 3: "bearer"}
@@ -506,6 +529,7 @@ def load_config_to_qmc(aw):
 
     qmc.autosave_upload_to_server = _config.autosave_upload_to_server
     qmc.autosave_server_url = _config.autosave_server_url
+    qmc.autosave_health_url = _config.autosave_health_url
     qmc.autosave_api_token = _config.autosave_api_token
     qmc.autosave_jwt_token = _config.autosave_jwt_token
     qmc.autosave_auth_type = _config.autosave_auth_type

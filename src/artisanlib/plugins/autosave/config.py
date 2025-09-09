@@ -23,7 +23,8 @@ class AutosaveAddonConfig:
     
     # Server upload settings
     autosave_upload_to_server: bool = False
-    autosave_server_url: str = "http://localhost:4000"
+    autosave_server_url: str = "http://localhost:5101"
+    autosave_health_url: str = "http://localhost:5101/api/files/health"
     autosave_api_token: str = ""
     autosave_jwt_token: str = ""
     autosave_auth_type: str = "none"  # "none", "api_token", "jwt", "bearer"
@@ -65,6 +66,11 @@ class AutosaveAddonConfig:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'AutosaveAddonConfig':
         """Create config from dictionary"""
+        # Handle backward compatibility - if health_url is not in old config, derive it from server_url
+        if 'autosave_health_url' not in data and 'autosave_server_url' in data:
+            server_url = data['autosave_server_url'].rstrip('/')
+            data['autosave_health_url'] = f"{server_url}/api/files/health"
+        
         return cls(**data)
     
     @classmethod
@@ -80,13 +86,13 @@ class AutosaveAddonConfig:
             if config_path.exists():
                 with open(config_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                    _log.info(f"✅ Loaded autosave addon config from {config_path}")
+                    _log.info(f"Loaded autosave addon config from {config_path}")
                     return cls.from_dict(data)
             else:
-                _log.info(f"📁 No config file found at {config_path}, using defaults")
+                _log.info(f"No config file found at {config_path}, using defaults")
                 return cls()
         except Exception as e:
-            _log.error(f"❌ Failed to load config from {config_path}: {e}")
+            _log.error(f"Failed to load config from {config_path}: {e}")
             return cls()
     
     def save_to_file(self, config_path: Optional[str] = None) -> bool:
@@ -101,8 +107,8 @@ class AutosaveAddonConfig:
             with open(config_path, 'w', encoding='utf-8') as f:
                 json.dump(self.to_dict(), f, indent=2, ensure_ascii=False)
             
-            _log.info(f"✅ Saved autosave addon config to {config_path}")
+            _log.info(f"Saved autosave addon config to {config_path}")
             return True
         except Exception as e:
-            _log.error(f"❌ Failed to save config to {config_path}: {e}")
+            _log.error(f"Failed to save config to {config_path}: {e}")
             return False

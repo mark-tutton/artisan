@@ -13451,6 +13451,16 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
                         (getattr(self.qmc, 'autosaveimage3', False), getattr(self.qmc, 'autosavealsopath3', ''), getattr(self.qmc, 'autosaveimageformat3', '')),
                     ]
                     orig_fmt = self.qmc.autosaveimageformat
+
+                    # DEBUG: Log autosave settings
+                    print(f"AUTOSAVE DEBUG - Starting autosave process")
+                    print(f"AUTOSAVE DEBUG - Upload to server enabled: {getattr(self.qmc, 'autosave_upload_to_server', False)}")
+                    print(f"AUTOSAVE DEBUG - Server URL: {getattr(self.qmc, 'autosave_server_url', 'Not set')}")
+                    print(f"AUTOSAVE DEBUG - Auth type: {getattr(self.qmc, 'autosave_auth_type', 'Not set')}")
+                    print(f"AUTOSAVE DEBUG - Extra formats: {len([x for x in extra_autosaves if x[0]])}")
+                    
+
+
                     for enabled, path, fmt in extra_autosaves:
                         if enabled and not self.qmc.flagon:
                             if path:
@@ -13476,27 +13486,54 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
                             self.qmc.autosaveimageformat = fmt
                             self.autosave(other_filename_path)
 
-                             # --- Upload to external server if enabled ---
-                            if getattr(self.qmc, 'autosave_upload_to_server', False):
-                                server_url = getattr(self.qmc, 'autosave_server_url', '')
-                                if hasattr(self, "addserial"):
-                                    self.addserial(f"Uploading {save_path} to server.")
-                                if server_url:
-                                    try:
-                                        if hasattr(self, "addserial"):
-                                            self.addserial(f"Uploading {save_path} to server.")
+                            # --- Upload to external server if enabled ---
+                            upload_enabled = getattr(self.qmc, 'autosave_upload_to_server', False)
+                            server_url = getattr(self.qmc, 'autosave_server_url', '')
+                            
+                            print(f"AUTOSAVE DEBUG - Upload check: enabled={upload_enabled}, server_url='{server_url}'")
+                            
+                            if upload_enabled and server_url:
+                                print(f"AUTOSAVE DEBUG - Attempting upload of {save_path}")
+                                
+                                # Check if file exists before uploading
+                                if not os.path.exists(save_path):
+                                    print(f"AUTOSAVE DEBUG - File does not exist: {save_path}")
+                                    continue
+                                    
+                                try:
+                                    if hasattr(self, "addserial"):
+                                        self.addserial(f"Uploading {save_path} to server.")
+                                        
+                                    if hasattr(self, 'upload_to_server') and callable(self.upload_to_server):
+                                        print(f"AUTOSAVE DEBUG - Using enhanced upload method")
+                                        result = self.upload_to_server(save_path, server_url, {'format': fmt})
+                                        if result:
+                                            if hasattr(self, "addmessage"):
+                                                self.addmessage(f"Uploaded {save_path} to server.")
+                                            _log.info(f"AUTOSAVE DEBUG - Upload successful: {save_path}")
+                                        else:
+                                            if hasattr(self, "addmessage"):
+                                                self.addmessage(f"Upload failed: {save_path}")
+                                            _log.error(f"AUTOSAVE DEBUG - Upload failed: {save_path}")
+                                    else:
+                                        _log.warning(f"AUTOSAVE DEBUG - Enhanced upload method not available, using basic upload")
+                                        # Fallback to basic upload
                                         self.upload_to_server(save_path, server_url, {'format': fmt})
                                         if hasattr(self, "addmessage"):
                                             self.addmessage(f"Uploaded {save_path} to server.")
+                                        _log.info(f"AUTOSAVE DEBUG - Basic upload successful: {save_path}")
 
-                                    except Exception as e:
-                                        if hasattr(self, "addserial"):
-                                            self.addserial(f"Failed to upload {save_path}: {e}")
-                                        if hasattr(self, "addmessage"):
-                                            self.addmessage(f"Failed to upload {save_path}: {e}")
+                                except Exception as e:
+                                    if hasattr(self, "addserial"):
+                                        self.addserial(f"Failed to upload {save_path}: {e}")
+                                    if hasattr(self, "addmessage"):
+                                        self.addmessage(f"Failed to upload {save_path}: {e}")
+                                    _log.error(f"AUTOSAVE DEBUG - Upload error: {e}")
+                            else:
+                                _log.info(f"AUTOSAVE DEBUG - Upload skipped: enabled={upload_enabled}, server_url='{server_url}'")
 
                     self.qmc.autosaveimageformat = orig_fmt
-                    # --- END ---
+                        # --- END ---
 
                     QDir.setCurrent(oldDir)
                     try:
@@ -19685,6 +19722,18 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
             # this one has done here, if it is done on start of the section the slider title colors are not set correctly on Linux and macOS
             if 'canvas' in self.qmc.palette:
                 self.updateCanvasColors(checkColors=False)
+
+            # Load autosave plugin configuration into qmc object
+            try:
+                from artisanlib.plugins.autosave.autosave_addons import load_config_to_qmc, integrate_with_automaticsave
+                load_config_to_qmc(self)
+                integrate_with_automaticsave(self)
+            except ImportError:
+                # Autosave addons not available, skip silently
+                pass
+            except Exception as e: # pylint: disable=broad-except
+                _log.exception(e)
+
 
         except Exception as e: # pylint: disable=broad-except
             _log.exception(e)
