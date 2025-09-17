@@ -255,9 +255,9 @@ class InventoryFetcher:
 
             if self.config.use_gateway:
                 # Use gateway auth validation endpoint
-                url = self._build_url("/api/auth/validate")
+                url = self._build_url("/auth/validate")
             else:
-                url = self._build_url("/api/auth/validate")
+                url = self._build_url("/auth/validate")
 
             response = self.session.post(url, timeout=self.timeout)
             if response.status_code == 200:

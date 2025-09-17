@@ -51,6 +51,7 @@ class AutosaveAddonConfig:
             "autosave_path_3": self.autosave_path_3,
             "autosave_upload_to_server": self.autosave_upload_to_server,
             "autosave_server_url": self.autosave_server_url,
+            "autosave_health_url": self.autosave_health_url,
             "autosave_api_token": self.autosave_api_token,
             "autosave_jwt_token": self.autosave_jwt_token,
             "autosave_auth_type": self.autosave_auth_type,
@@ -81,6 +82,9 @@ class AutosaveAddonConfig:
             config_dir = Path.home() / ".artisan" / "plugins" / "autosave"
             config_dir.mkdir(parents=True, exist_ok=True)
             config_path = config_dir / "config.json"
+        else:
+            # Convert string to Path object
+            config_path = Path(config_path)
         
         try:
             if config_path.exists():
@@ -103,6 +107,9 @@ class AutosaveAddonConfig:
                 config_dir = Path.home() / ".artisan" / "plugins" / "autosave"
                 config_dir.mkdir(parents=True, exist_ok=True)
                 config_path = config_dir / "config.json"
+            else:
+                # convert string to Path object
+                config_path = Path(config_path)
             
             with open(config_path, 'w', encoding='utf-8') as f:
                 json.dump(self.to_dict(), f, indent=2, ensure_ascii=False)
