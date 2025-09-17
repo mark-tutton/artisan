@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject
 from .config import AutosaveAddonConfig
+from .token_manager import JWTTokenManager
 
 _log = logging.getLogger(__name__)
 
@@ -26,6 +27,8 @@ class ServerHealthChecker(QObject):
 
     health_status_changed = pyqtSignal(bool)
     connection_error = pyqtSignal(str)
+    token_refresh_needed = pyqtSignal()  
+
 
     def __init__(self, config: AutosaveAddonConfig):
         super().__init__()
@@ -34,6 +37,10 @@ class ServerHealthChecker(QObject):
         self.last_check = 0
         self.health_timer = QTimer()
         self.health_timer.timeout.connect(self._check_server_health)
+
+        # init token manager
+        self.token_manager = JWTTokenManager(config)
+
 
         if config.autosave_health_check_enabled:
             self.health_timer.start(config.autosave_health_check_interval * 1000)
@@ -51,6 +58,25 @@ class ServerHealthChecker(QObject):
             )
 
             _log.debug(f"Health check response: {response.status_code}")
+            
+            # Handle 401 Unauthorized - token might be expired
+            if response.status_code == 401:
+                _log.warning("Health check returned 401 - token may be expired")
+                if self.config.autosave_auto_refresh and self.token_manager.current_token:
+                    _log.info("Attempting automatic token refresh...")
+                    if self.token_manager.refresh_token():
+                        _log.info("Token refreshed, retrying health check")
+                        # Retry health check with new token
+                        response = requests.get(
+                            health_url,
+                            timeout=self.config.autosave_connection_timeout,
+                                headers=self._get_auth_headers(),
+                        )
+                    else:
+                        _log.error("Token refresh failed")
+                        self.token_refresh_needed.emit()
+                        return
+            
             if response.status_code == 200:
                 _log.debug(f"Response content: {response.text[:200]}...")
 
@@ -95,15 +121,16 @@ class ServerHealthChecker(QObject):
 
         if self.config.autosave_auth_type == "api_token" and self.config.autosave_api_token:
             headers["X-API-Key"] = self.config.autosave_api_token
-        elif self.config.autosave_auth_type == "jwt" and self.config.autosave_jwt_token:
-            headers["Authorization"] = f"Bearer {self.config.autosave_jwt_token}"
-        elif self.config.autosave_auth_type == "bearer" and self.config.autosave_jwt_token:
-            headers["Authorization"] = f"Bearer {self.config.autosave_jwt_token}"
+        elif self.config.autosave_auth_type in ["jwt", "bearer"]:
+            # Use token manager for JWT tokens
+            auth_headers = self.token_manager.get_auth_headers()
+            headers.update(auth_headers)
 
         return headers
 
+
     def upload_file(self, file_path: str, file_type: str) -> bool:
-        """Upload a file to the server with retry logic"""
+        """Upload a file to the server with retry logic and token refresh"""
         if not self.is_healthy:
             _log.warning("Skipping upload - server is not healthy")
             return False
@@ -119,9 +146,6 @@ class ServerHealthChecker(QObject):
                     }
 
                     _log.info(f"Attempting upload {attempt + 1}: {file_path}")
-                    _log.info(f"Upload URL: {self.config.autosave_server_url}")
-                    _log.info(f"File type: {file_type}")
-                    _log.info(f"Data: {data}")
 
                     headers = self._get_auth_headers()
                     if "Content-Type" in headers:
@@ -136,16 +160,26 @@ class ServerHealthChecker(QObject):
                     )
 
                     _log.info(f"Response status: {response.status_code}")
-                    _log.info(f"Response headers: {dict(response.headers)}")
-                    _log.info(f"Response body: {response.text[:500]}")
 
                     if response.status_code == 200:
                         _log.info(f"File uploaded successfully: {file_path}")
                         return True
+                    elif response.status_code == 401:
+                        _log.warning(f"Upload failed with 401 - token may be expired")
+                        if self.config.autosave_auto_refresh and self.token_manager.current_token:
+                            _log.info("Attempting token refresh for upload...")
+                            if self.token_manager.refresh_token():
+                                _log.info("Token refreshed, retrying upload")
+                                continue  # Retry with new token
+                            else:
+                                _log.error("Token refresh failed during upload")
+                                self.token_refresh_needed.emit()
+                                return False
+                        else:
+                            _log.error("No refresh token available for upload")
+                            return False
                     else:
-                        _log.warning(
-                            f"Upload failed (attempt {attempt + 1}): {response.status_code}"
-                        )
+                        _log.warning(f"Upload failed (attempt {attempt + 1}): {response.status_code}")
                         _log.warning(f"Response body: {response.text}")
 
             except requests.exceptions.RequestException as e:
@@ -154,15 +188,20 @@ class ServerHealthChecker(QObject):
             if attempt < self.config.autosave_retry_attempts - 1:
                 time.sleep(self.config.autosave_retry_delay)
 
-        _log.error(
-            f"File upload failed after {self.config.autosave_retry_attempts} attempts: {file_path}"
-        )
+        _log.error(f"File upload failed after {self.config.autosave_retry_attempts} attempts: {file_path}")
         return False
+
+    def set_tokens(self, access_token: str, refresh_token: str, expires_in: int) -> None:
+        """Set new JWT tokens"""
+        self.token_manager.set_tokens(access_token, refresh_token, expires_in)
+    
+    def clear_tokens(self) -> None:
+        """Clear JWT tokens"""
+        self.token_manager.clear_tokens()
 
     def stop(self) -> None:
         """Stop the health checker"""
         self.health_timer.stop()
-
 
 # Global config and health checker instances
 _config = AutosaveAddonConfig.load_from_file()
@@ -224,6 +263,14 @@ def integrate_with_automaticsave(aw):
         _log.info(f"AUTOSAVE PLUGIN DEBUG - Server URL: {_config.autosave_server_url}")
         _log.info(f"AUTOSAVE PLUGIN DEBUG - Health URL: {_config.autosave_health_url}")
         _log.info(f"AUTOSAVE PLUGIN DEBUG - Upload enabled: {_config.autosave_upload_to_server}")
+
+        def set_auth_tokens(access_token: str, refresh_token: str, expires_in: int):
+            """Set authentication tokens (call this after login)"""
+            health_checker.set_tokens(access_token, refresh_token, expires_in)
+            _log.info("Authentication tokens set for autosave plugin")
+        
+        aw.set_autosave_auth_tokens = set_auth_tokens
+        
 
         def enhanced_upload_to_server(filepath: str, server_url: str, extra_params: dict = None):
             """Enhanced upload method with health checking and retry logic"""
@@ -328,6 +375,99 @@ def create_server_upload_widgets(aw):
     statusLabel = QLabel(QApplication.translate("Label", "Server Status:"))
     statusIndicator = QLabel("Checking...")
     statusIndicator.setStyleSheet("color: orange;")
+
+    # Add token management section
+    tokenGroupBox = QGroupBox(QApplication.translate("GroupBox", "JWT Token Management"))
+    tokenLayout = QVBoxLayout()
+    
+    # Token status
+    tokenStatusLabel = QLabel(QApplication.translate("Label", "Token Status:"))
+    tokenStatusIndicator = QLabel("No token")
+    tokenStatusIndicator.setStyleSheet("color: red;")
+    
+    # Token expiry info
+    tokenExpiryLabel = QLabel(QApplication.translate("Label", "Expires:"))
+    tokenExpiryInfo = QLabel("Unknown")
+    
+    # Auto-refresh checkbox
+    autoRefreshCheckbox = QCheckBox(QApplication.translate("CheckBox", "Auto-refresh tokens"))
+    autoRefreshCheckbox.setChecked(_config.autosave_auto_refresh)
+    
+    # Manual refresh button
+    refreshTokenButton = QPushButton(QApplication.translate("Button", "🔄 Refresh Token"))
+    
+    # Clear tokens button
+    clearTokensButton = QPushButton(QApplication.translate("Button", "🗑️ Clear Tokens"))
+    
+    tokenLayout.addWidget(tokenStatusLabel)
+    tokenLayout.addWidget(tokenStatusIndicator)
+    tokenLayout.addWidget(tokenExpiryLabel)
+    tokenLayout.addWidget(tokenExpiryInfo)
+    tokenLayout.addWidget(autoRefreshCheckbox)
+    tokenLayout.addWidget(refreshTokenButton)
+    tokenLayout.addWidget(clearTokensButton)
+    
+    tokenGroupBox.setLayout(tokenLayout)
+    
+    # Store references
+    tokenGroupBox.tokenStatusIndicator = tokenStatusIndicator
+    tokenGroupBox.tokenExpiryInfo = tokenExpiryInfo
+    tokenGroupBox.autoRefreshCheckbox = autoRefreshCheckbox
+    tokenGroupBox.refreshTokenButton = refreshTokenButton
+    tokenGroupBox.clearTokensButton = clearTokensButton
+
+    # Get the health checker and connect signals
+    health_checker = get_health_checker()
+
+    def update_token_status():
+        """Update token status display"""
+        token_manager = health_checker.token_manager
+        if token_manager.current_token:
+            if token_manager.is_token_expired():
+                tokenStatusIndicator.setText("Expired")
+                tokenStatusIndicator.setStyleSheet("color: red;")
+            else:
+                tokenStatusIndicator.setText("Valid")
+                tokenStatusIndicator.setStyleSheet("color: green;")
+            
+            # Show expiry time
+            expiry_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(token_manager.current_token.expires_at))
+            tokenExpiryInfo.setText(expiry_time)
+        else:
+            tokenStatusIndicator.setText("No token")
+            tokenStatusIndicator.setStyleSheet("color: red;")
+            tokenExpiryInfo.setText("Unknown")
+
+    def on_refresh_token_clicked():
+        """Handle manual token refresh"""
+        if health_checker.token_manager.refresh_token():
+            update_token_status()
+            _log.info("Manual token refresh successful")
+        else:
+            _log.error("Manual token refresh failed")
+
+    def on_clear_tokens_clicked():
+        """Handle token clearing"""
+        health_checker.clear_tokens()
+        update_token_status()
+        _log.info("Tokens cleared")
+
+    def on_auto_refresh_changed(checked):
+        """Handle auto-refresh setting change"""
+        _config.autosave_auto_refresh = checked
+
+    # Connect signals
+    refreshTokenButton.clicked.connect(on_refresh_token_clicked)
+    clearTokensButton.clicked.connect(on_clear_tokens_clicked)
+    autoRefreshCheckbox.toggled.connect(on_auto_refresh_changed)
+    
+    # Connect token refresh needed signal
+    def on_token_refresh_needed():
+        update_token_status()
+        _log.warning("Token refresh needed - please check authentication")
+
+    health_checker.token_refresh_needed.connect(on_token_refresh_needed)
+
 
     # Connect auth type changes to show/hide token fields
     def on_auth_type_changed(index):

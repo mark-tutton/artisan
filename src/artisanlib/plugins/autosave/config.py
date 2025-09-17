@@ -28,6 +28,13 @@ class AutosaveAddonConfig:
     autosave_api_token: str = ""
     autosave_jwt_token: str = ""
     autosave_auth_type: str = "none"  # "none", "api_token", "jwt", "bearer"
+
+     # JWT Token Management
+    autosave_refresh_token: str = ""
+    autosave_token_expires_at: int = 0  # Unix timestamp
+    autosave_auto_refresh: bool = True  # Auto-refresh tokens when expired
+    autosave_refresh_threshold: int = 300  # Refresh 5 minutes before expiry
+    
     
     # Server connection settings
     autosave_connection_timeout: int = 30  # seconds
@@ -54,6 +61,11 @@ class AutosaveAddonConfig:
             "autosave_health_url": self.autosave_health_url,
             "autosave_api_token": self.autosave_api_token,
             "autosave_jwt_token": self.autosave_jwt_token,
+            "autosave_refresh_token": self.autosave_refresh_token,
+            "autosave_token_expires_at": self.autosave_token_expires_at,
+            "autosave_auto_refresh": self.autosave_auto_refresh,
+            "autosave_refresh_threshold": self.autosave_refresh_threshold,
+          
             "autosave_auth_type": self.autosave_auth_type,
             "autosave_connection_timeout": self.autosave_connection_timeout,
             "autosave_retry_attempts": self.autosave_retry_attempts,
