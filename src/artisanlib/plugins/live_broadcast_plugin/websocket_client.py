@@ -396,12 +396,15 @@ class SocketIOBroadcaster(QObject):
                 # Add client ID to message for server-side filtering
                 if isinstance(data, dict):
                     data["senderClientId"] = self.client_id
+                    data["roaster_id"] = self.client_id 
+
 
                 asyncio.run_coroutine_threadsafe(self._emit_with_ack(event_type, data), self._loop)
             else:
                 message_data = {
                     "data": message,
-                    "senderClientId": self.client_id
+                    "senderClientId": self.client_id,
+                    "roaster_id": self.client_id
                 }
                 asyncio.run_coroutine_threadsafe(
                     self._emit_with_ack("message", message_data), self._loop

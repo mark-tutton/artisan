@@ -148,8 +148,68 @@ class GlobalAuthManager(QObject):
             return
         self._initialized = True
         self.current_token: Optional[TokenInfo] = None
-        self.auth_base_url = "http://localhost:5101/auth"
+        
+        
+        
+        # self.auth_base_url = "http://localhost:5101/auth"
+        # self._load_stored_tokens()
+
+        self.auth_base_url = self._load_auth_config()
         self._load_stored_tokens()
+
+
+    def _load_auth_config(self) -> str:
+        """Load auth configuration from file"""
+        try:
+            config_path = Path.home() / ".artisan" / "auth" / "auth_config.json"
+            if config_path.exists():
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                auth_url = config.get('auth_base_url', 'http://localhost:5101/auth')
+                _log.info(f"Loaded auth URL from config: {auth_url}")
+                return auth_url
+        except Exception as e:
+            _log.warning(f"Could not load auth config: {e}")
+        
+        # Fallback to env var or default
+        fallback_url = os.getenv('ARTISAN_AUTH_BASE_URL', 'http://localhost:5101/auth')
+        _log.info(f"Using fallback auth URL: {fallback_url}")
+        return fallback_url
+    
+    def _save_auth_config(self) -> None:
+        """Save auth configuration to file"""
+        try:
+            config_path = Path.home() / ".artisan" / "auth" / "auth_config.json"
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            config = {
+                'auth_base_url': self.auth_base_url,
+                'updated_at': time.time()
+            }
+            
+            with open(config_path, 'w', encoding='utf-8') as f:
+                json.dump(config, f, indent=2, ensure_ascii=False)
+                
+            _log.debug(f"Auth config saved to: {config_path}")
+        except Exception as e:
+            _log.error(f"Failed to save auth config: {e}")
+    
+    def set_auth_base_url(self, url: str) -> None:
+        """Set the authentication base URL and save to config"""
+        if not url.endswith('/auth'):
+            url = url.rstrip('/') + '/auth'
+        self.auth_base_url = url
+        _log.info(f"Auth base URL set to: {self.auth_base_url}")
+        
+        # Save to config file
+        self._save_auth_config()
+
+    
+    def get_auth_base_url(self) -> str:
+        """Get the current authentication base URL"""
+        return self.auth_base_url
+
+
     
     def login_with_google(self) -> bool:
         """Perform Google OAuth login"""
@@ -180,7 +240,11 @@ class GlobalAuthManager(QObject):
             if server.tokens:
                 access_token = server.tokens['accessToken']
                 refresh_token = server.tokens['refreshToken']
-                expires_in = 3600  # Default 1 hour
+
+                 # Get actual expiration from server response
+                expires_in = server.tokens.get('expiresIn', 3600)  # Default 1 hour if not provided
+                
+                # expires_in = 3600  # Default 1 hour
                 
                 self._set_tokens(access_token, refresh_token, expires_in)
                 self.login_successful.emit(access_token, refresh_token)
