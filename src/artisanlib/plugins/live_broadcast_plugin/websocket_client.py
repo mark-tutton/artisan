@@ -51,6 +51,7 @@ class SocketIOBroadcaster(QObject):
         connection_timeout: float = 10.0,
         ping_interval: float = 30.0,
         connection_refresh_interval: float = 3600.0,  # 1 hour refresh
+        roaster_id: Optional[str] = None, 
     ):
         super().__init__()
 
@@ -66,6 +67,10 @@ class SocketIOBroadcaster(QObject):
         self.path = path if path.startswith("/") else f"/{path}"
         self.auth_token = auth_token
         self.refresh_token = refresh_token
+
+        # roaster id 
+        self.roaster_id = roaster_id.strip() if roaster_id and roaster_id.strip() else self._generate_stable_client_id()
+        
 
         # Build URL with proper protocol
         protocol = "https" if secure else "http"
@@ -396,7 +401,7 @@ class SocketIOBroadcaster(QObject):
                 # Add client ID to message for server-side filtering
                 if isinstance(data, dict):
                     data["senderClientId"] = self.client_id
-                    data["roaster_id"] = self.client_id 
+                    data["roaster_id"] = self.roaster_id 
 
 
                 asyncio.run_coroutine_threadsafe(self._emit_with_ack(event_type, data), self._loop)
@@ -404,7 +409,7 @@ class SocketIOBroadcaster(QObject):
                 message_data = {
                     "data": message,
                     "senderClientId": self.client_id,
-                    "roaster_id": self.client_id
+                    "roaster_id": self.roaster_id
                 }
                 asyncio.run_coroutine_threadsafe(
                     self._emit_with_ack("message", message_data), self._loop

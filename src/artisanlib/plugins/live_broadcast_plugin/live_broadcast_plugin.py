@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 import time
 import traceback
 from typing import Dict, Any, Optional, List, Callable
@@ -90,6 +91,19 @@ class LiveBroadcastPlugin(PluginBase):
         # Core components
         self.signals = LiveBroadcastSignals()
         self.config = LiveBroadcastConfig()
+
+        # Load saved configuration
+        try:
+            config_file = self.config.get_config_file()
+            if os.path.exists(config_file):
+                self.config.load_from_file(config_file)
+                self.logger.info(f"Loaded configuration from {config_file}")
+            else:
+                self.logger.info("No saved configuration found, using defaults")
+        except Exception as e:
+            self.logger.error(f"Failed to load configuration: {e}")
+        
+
         self.broadcaster: Optional[SocketIOBroadcaster] = None
 
         self._last_broadcast_time: float = 0
@@ -207,6 +221,7 @@ class LiveBroadcastPlugin(PluginBase):
                     connection_timeout=self.config.connection_timeout,
                     ping_interval=self.config.heartbeat_interval,
                     connection_refresh_interval=self.config.connection_refresh_interval,
+                    roaster_id=self.config.roaster_id if self.config.roaster_id.strip() else None,
                 )
                 self.logger.info("SocketIO broadcaster initialized in worker thread")
                 
@@ -2017,6 +2032,7 @@ class LiveBroadcastPlugin(PluginBase):
                 reconnect_interval=self.config.reconnect_interval,
                 max_reconnect_attempts=self.config.max_reconnect_attempts,
                 connection_refresh_interval=self.config.connection_refresh_interval,
+                roaster_id=self.config.roaster_id or None,
             )
             # Add connection handlers
             self.broadcaster.add_connection_handler(self._on_connected)

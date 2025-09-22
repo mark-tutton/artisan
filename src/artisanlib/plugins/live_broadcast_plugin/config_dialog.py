@@ -1,5 +1,6 @@
 import sys
 import logging
+import os
 import traceback
 from typing import Optional, Dict, Any
 
@@ -57,12 +58,14 @@ class LiveBroadcastConfigDialog(QDialog):
     config_saved = pyqtSignal()
     config_tested = pyqtSignal(bool, str)  # success, message
 
+
     def __init__(self, parent, config: LiveBroadcastConfig):
         super().__init__(parent)
         self.config = config
         self.auth_manager = GlobalAuthManager()
+    
+        self._ensure_config_loaded()
         
-        # Initialize missing attributes
         self.test_in_progress = False
         self._config_mutex = QMutex()
         self.original_config = config.to_dict() if hasattr(config, 'to_dict') else {}
@@ -72,6 +75,19 @@ class LiveBroadcastConfigDialog(QDialog):
         self.update_auth_status()
         self.load_config()
         self.setup_validation()
+
+    def _ensure_config_loaded(self):
+        """Ensure the config is loaded from the saved file"""
+        try:
+            config_file = self.config.get_config_file()
+            if os.path.exists(config_file):
+                # Load the saved config
+                self.config.load_from_file(config_file)
+                _log.info(f"Config dialog loaded configuration from {config_file}")
+            else:
+                _log.info("No saved configuration found for config dialog")
+        except Exception as e:
+            _log.error(f"Failed to load configuration in dialog: {e}")
 
     def exec(self):
         """Execute the dialog (PyQt6 compatibility)"""
@@ -112,7 +128,7 @@ class LiveBroadcastConfigDialog(QDialog):
             # Setup buttons
             self.setup_buttons()
 
-            # Main layout - CREATE THIS FIRST
+            # Main layout 
             layout = QVBoxLayout()
             
             # Add auth status section
@@ -213,6 +229,13 @@ class LiveBroadcastConfigDialog(QDialog):
             self.path_edit.setPlaceholderText("/socket.io/")
             self.path_edit.setToolTip("Socket.IO server path")
             server_layout.addRow("Path:", self.path_edit)
+
+            # Add roaster ID field
+            self.roaster_id_edit = QLineEdit()
+            self.roaster_id_edit.setPlaceholderText("Leave empty for auto-generated ID")
+            self.roaster_id_edit.setToolTip("Custom roaster identifier (leave empty to auto-generate)")
+            server_layout.addRow("Roaster ID:", self.roaster_id_edit)
+
 
             server_group.setLayout(server_layout)
             layout.addWidget(server_group)
@@ -567,6 +590,10 @@ class LiveBroadcastConfigDialog(QDialog):
             self.host_edit.setText(self.config.server_host)
             self.port_spin.setValue(self.config.server_port)
             self.path_edit.setText(self.config.server_path)
+            
+            # Roaster ID
+            self.roaster_id_edit.setText(self.config.roaster_id)
+
 
             # Security settings
             self.use_ssl_check.setChecked(self.config.use_ssl)
@@ -632,6 +659,9 @@ class LiveBroadcastConfigDialog(QDialog):
             self.config.server_host = self.host_edit.text().strip()
             self.config.server_port = self.port_spin.value()
             self.config.server_path = self.path_edit.text().strip()
+
+            # Roaster ID
+            self.config.roaster_id = self.roaster_id_edit.text().strip()
 
             # Security settings
             self.config.use_ssl = self.use_ssl_check.isChecked()

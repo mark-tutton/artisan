@@ -14,6 +14,10 @@ class LiveBroadcastConfig:
     server_port: int = 5100
     server_path: str = "/socket.io/"
 
+    # Roaster identification
+    roaster_id: str = ""  # Custom roaster identifier (empty = auto-generate)
+
+
     # Connection settings
     reconnect_interval: float = 15.0
     max_reconnect_attempts: int = 5
