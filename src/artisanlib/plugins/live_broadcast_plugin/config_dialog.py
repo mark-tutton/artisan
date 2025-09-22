@@ -43,14 +43,14 @@ except ImportError:
         QTextEdit,
         QProgressBar,
     )
-    from PyQt5.QtCore import Qt, QTimer, pyqtSignal
+    from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QThread, QMutex
     from PyQt5.QtGui import QFont, QIcon
 
 from .config import LiveBroadcastConfig
 from .websocket_client import SOCKETIO_AVAILABLE
+from ..auth_manager import GlobalAuthManager
 
 _log = logging.getLogger(__name__)
-
 
 class LiveBroadcastConfigDialog(QDialog):
     # Signals
@@ -60,19 +60,27 @@ class LiveBroadcastConfigDialog(QDialog):
     def __init__(self, parent, config: LiveBroadcastConfig):
         super().__init__(parent)
         self.config = config
-        self.original_config = config.to_dict()
+        self.auth_manager = GlobalAuthManager()
+        
+        # Initialize missing attributes
         self.test_in_progress = False
-
         self._config_mutex = QMutex()
-
+        self.original_config = config.to_dict() if hasattr(config, 'to_dict') else {}
+        
         self.setup_ui()
+        self.connect_signals()
+        self.update_auth_status()
         self.load_config()
         self.setup_validation()
 
-        # Connect test result signal
-        self.config_tested.connect(self._handle_test_result)
-
-        _log.info("Configuration dialog initialized")
+    def exec(self):
+        """Execute the dialog (PyQt6 compatibility)"""
+        try:
+            # Try PyQt6 first
+            return super().exec()
+        except AttributeError:
+            # Fallback to PyQt5
+            return super().exec_()
 
     def setup_ui(self):
         try:
@@ -104,8 +112,25 @@ class LiveBroadcastConfigDialog(QDialog):
             # Setup buttons
             self.setup_buttons()
 
-            # Main layout
+            # Main layout - CREATE THIS FIRST
             layout = QVBoxLayout()
+            
+            # Add auth status section
+            auth_group = QGroupBox("Authentication Status")
+            auth_layout = QVBoxLayout(auth_group)
+            
+            self.auth_status_label = QLabel("Not authenticated")
+            self.auth_status_label.setStyleSheet("color: red; font-weight: bold;")
+            auth_layout.addWidget(self.auth_status_label)
+            
+            self.login_button = QPushButton("Login")
+            self.login_button.clicked.connect(self.show_login_dialog)
+            auth_layout.addWidget(self.login_button)
+            
+            # Add auth group to main layout
+            layout.addWidget(auth_group)
+            
+            # Add tab widget to main layout
             layout.addWidget(self.tab_widget)
             layout.addLayout(self.button_layout)
             self.setLayout(layout)
@@ -114,6 +139,54 @@ class LiveBroadcastConfigDialog(QDialog):
             _log.error(f"Error setting up UI: {e}")
             self.show_error("Setup Error", f"Failed to setup configuration dialog: {e}")
             raise
+
+    def connect_signals(self):
+        # Connect to auth manager signals
+        self.auth_manager.login_successful.connect(self.on_auth_success)
+        self.auth_manager.login_failed.connect(self.on_auth_failed)
+        self.auth_manager.token_refreshed.connect(self.on_token_refreshed)
+        self.auth_manager.token_expired.connect(self.on_token_expired)
+
+    def update_auth_status(self):
+        """Update the authentication status display"""
+        if self.auth_manager.is_authenticated():
+            token_info = self.auth_manager.get_token_info()
+            if token_info:
+                expires_in = token_info.get('expires_in', 0)
+                self.auth_status_label.setText(f"Authenticated (expires in {expires_in}s)")
+                self.auth_status_label.setStyleSheet("color: green; font-weight: bold;")
+                self.login_button.setText("Re-login")
+            else:
+                self.auth_status_label.setText("Authenticated")
+                self.auth_status_label.setStyleSheet("color: green; font-weight: bold;")
+                self.login_button.setText("Re-login")
+        else:
+            self.auth_status_label.setText("Not authenticated")
+            self.auth_status_label.setStyleSheet("color: red; font-weight: bold;")
+            self.login_button.setText("Login")
+
+    def show_login_dialog(self):
+        """Show the login dialog"""
+        from ..auth_dialog import AuthDialog
+        dialog = AuthDialog(self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.update_auth_status()
+
+    def on_auth_success(self, access_token: str, refresh_token: str):
+        """Handle successful authentication"""
+        self.update_auth_status()
+
+    def on_auth_failed(self, error: str):
+        """Handle authentication failure"""
+        self.update_auth_status()
+
+    def on_token_refreshed(self, access_token: str, refresh_token: str):
+        """Handle token refresh"""
+        self.update_auth_status()
+
+    def on_token_expired(self):
+        """Handle token expiration"""
+        self.update_auth_status()
 
     def setup_server_tab(self):
         """Setup server configuration tab"""
@@ -132,7 +205,6 @@ class LiveBroadcastConfigDialog(QDialog):
 
             self.port_spin = QSpinBox()
             self.port_spin.setRange(1, 65535)
-            # self.port_spin.setValue(3001)
             self.port_spin.setValue(5100)
             self.port_spin.setToolTip("Socket.IO server port")
             server_layout.addRow("Port:", self.port_spin)
@@ -152,63 +224,6 @@ class LiveBroadcastConfigDialog(QDialog):
             self.use_ssl_check = QCheckBox("Use SSL/TLS (WSS)")
             self.use_ssl_check.setToolTip("Enable secure WebSocket connection")
             security_layout.addRow(self.use_ssl_check)
-
-            self.auth_token_edit = QLineEdit()
-            self.auth_token_edit.setPlaceholderText("Enter JWT token")
-            self.auth_token_edit.setToolTip("JWT authentication token for server access")
-
-            self.refresh_token_edit = QLineEdit()
-            self.refresh_token_edit.setPlaceholderText("Enter refresh token")
-            self.refresh_token_edit.setToolTip("Refresh token for JWT authentication")
-
-            try:
-                # PyQt6
-                self.auth_token_edit.setEchoMode(QLineEdit.Password)
-                self.refresh_token_edit.setEchoMode(QLineEdit.Password)
-            except AttributeError:
-                # PyQt5
-                self.auth_token_edit.setEchoMode(QLineEdit.EchoMode.Password)
-                self.refresh_token_edit.setEchoMode(QLineEdit.EchoMode.Password)
-
-            # Show/hide token button
-            self.show_token_button = QPushButton("�� Show")
-            self.show_token_button.setCheckable(True)
-            self.show_token_button.setToolTip("Toggle token visibility")
-            self.show_token_button.toggled.connect(self.toggle_token_visibility)
-
-            token_layout = QHBoxLayout()
-            token_layout.addWidget(self.auth_token_edit)
-            token_layout.addWidget(self.show_token_button)
-            security_layout.addRow("JWT Token:", token_layout)
-
-            # Show/hide refresh token button
-            self.show_refresh_token_button = QPushButton("👁️ Show")
-            self.show_refresh_token_button.setCheckable(True)
-            self.show_refresh_token_button.setToolTip("Toggle refresh token visibility")
-            self.show_refresh_token_button.toggled.connect(self.toggle_refresh_token_visibility)
-
-            refresh_token_layout = QHBoxLayout()
-            refresh_token_layout.addWidget(self.refresh_token_edit)
-            refresh_token_layout.addWidget(self.show_refresh_token_button)
-            security_layout.addRow("Refresh Token:", refresh_token_layout)
-
-            # JWT Issuer
-            self.jwt_issuer_edit = QLineEdit()
-            self.jwt_issuer_edit.setPlaceholderText("https://your-domain.com")
-            self.jwt_issuer_edit.setToolTip("Expected JWT issuer (iss claim)")
-            security_layout.addRow("Expected Issuer:", self.jwt_issuer_edit)
-
-            # JWT Audience
-            self.jwt_audience_edit = QLineEdit()
-            self.jwt_audience_edit.setPlaceholderText("artisan-broadcast")
-            self.jwt_audience_edit.setToolTip("Expected JWT audience (aud claim)")
-            security_layout.addRow("Expected Audience:", self.jwt_audience_edit)
-
-            # JWT Validation toggle
-            self.jwt_validation_check = QCheckBox("Enable JWT Validation")
-            self.jwt_validation_check.setChecked(True)
-            self.jwt_validation_check.setToolTip("Enable JWT token validation")
-            security_layout.addRow("", self.jwt_validation_check)
 
             self.validate_ssl_check = QCheckBox("Validate SSL Certificate")
             self.validate_ssl_check.setToolTip("Validate server SSL certificate")
@@ -518,7 +533,7 @@ class LiveBroadcastConfigDialog(QDialog):
             self.ok_button.setToolTip("Save configuration and close dialog")
             self.button_layout.addWidget(self.ok_button)
 
-            # Cancel button # FIXME: Cancel button is not working
+            # Cancel button
             self.cancel_button = QPushButton("Cancel")
             self.cancel_button.clicked.connect(self.reject)
             self.cancel_button.setToolTip("Cancel changes and close dialog")
@@ -544,56 +559,6 @@ class LiveBroadcastConfigDialog(QDialog):
         except Exception as e:
             _log.error(f"Error setting up validation: {e}")
 
-    def toggle_token_visibility(self, checked: bool):
-        """Toggle JWT token visibility"""
-        try:
-            if checked:
-                # Handle both PyQt5 and PyQt6
-                try:
-                    # PyQt6
-                    self.auth_token_edit.setEchoMode(QLineEdit.Normal)
-                except AttributeError:
-                    # PyQt5
-                    self.auth_token_edit.setEchoMode(QLineEdit.EchoMode.Normal)
-
-                self.show_token_button.setText("Hide")
-                self.show_token_button.setToolTip("Hide JWT token")
-            else:
-                # Handle both PyQt5 and PyQt6
-                try:
-                    # PyQt6
-                    self.auth_token_edit.setEchoMode(QLineEdit.Password)
-                except AttributeError:
-                    # PyQt5
-                    self.auth_token_edit.setEchoMode(QLineEdit.EchoMode.Password)
-
-                self.show_token_button.setText("Show")
-                self.show_token_button.setToolTip("Show JWT token")
-        except Exception as e:
-            _log.error(f"Error toggling token visibility: {e}")
-
-    def toggle_refresh_token_visibility(self, checked):
-        """Toggle refresh token visibility"""
-        try:
-            if checked:
-                # PyQt6
-                self.refresh_token_edit.setEchoMode(QLineEdit.Normal)
-            else:
-                self.refresh_token_edit.setEchoMode(QLineEdit.Password)
-        except AttributeError:
-            # PyQt5
-            if checked:
-                self.refresh_token_edit.setEchoMode(QLineEdit.EchoMode.Normal)
-            else:
-                self.refresh_token_edit.setEchoMode(QLineEdit.EchoMode.Password)
-
-        if checked:
-            self.show_refresh_token_button.setText("🙈 Hide")
-            self.show_refresh_token_button.setToolTip("Hide refresh token")
-        else:
-            self.show_refresh_token_button.setText("👁️ Show")
-            self.show_refresh_token_button.setToolTip("Show refresh token")
-
     def load_config(self):
         """Load configuration into UI with error handling"""
         self._config_mutex.lock()
@@ -605,11 +570,6 @@ class LiveBroadcastConfigDialog(QDialog):
 
             # Security settings
             self.use_ssl_check.setChecked(self.config.use_ssl)
-            self.auth_token_edit.setText(self.config.auth_token or "")
-            self.refresh_token_edit.setText(self.config.refresh_token or "")
-            self.jwt_issuer_edit.setText(self.config.jwt_issuer or "")
-            self.jwt_audience_edit.setText(self.config.jwt_audience or "")
-            self.jwt_validation_check.setChecked(self.config.jwt_validation_enabled)
             self.validate_ssl_check.setChecked(self.config.validate_ssl_cert)
             self.enforce_secure_check.setChecked(self.config.enforce_secure_connection)
 
@@ -653,7 +613,7 @@ class LiveBroadcastConfigDialog(QDialog):
             self.update_config_info()
 
             _log.debug("Configuration loaded into UI")
-            pass
+
         except Exception as e:
             _log.error(f"Error loading configuration: {e}")
             self.show_error("Load Error", f"Failed to load configuration: {e}")
@@ -675,11 +635,6 @@ class LiveBroadcastConfigDialog(QDialog):
 
             # Security settings
             self.config.use_ssl = self.use_ssl_check.isChecked()
-            self.config.auth_token = self.auth_token_edit.text().strip() or None
-            self.config.refresh_token = self.refresh_token_edit.text().strip() or None
-            self.config.jwt_issuer = self.jwt_issuer_edit.text().strip() or None
-            self.config.jwt_audience = self.jwt_audience_edit.text().strip() or None
-            self.config.jwt_validation_enabled = self.jwt_validation_check.isChecked()
             self.config.validate_ssl_cert = self.validate_ssl_check.isChecked()
             self.config.enforce_secure_connection = self.enforce_secure_check.isChecked()
 
@@ -721,57 +676,12 @@ class LiveBroadcastConfigDialog(QDialog):
             }
 
             _log.debug("Configuration saved from UI")
-            pass
 
         except Exception as e:
             _log.error(f"Error saving configuration: {e}")
             raise
-
         finally:
             self._config_mutex.unlock()
-
-    def validate_config(self):
-        """Validate configuration values"""
-        try:
-            errors = []
-
-            # Server validation
-            if not self.config.server_host.strip():
-                errors.append("Server host cannot be empty")
-
-            if self.config.server_port < 1 or self.config.server_port > 65535:
-                errors.append("Server port must be between 1 and 65535")
-
-            if not self.config.socketio_path.startswith("/"):
-                errors.append("Socket.IO path must start with '/'")
-
-            # Security validation
-            if self.config.use_ssl and not self.config.auth_token.strip():
-                errors.append("JWT token is required for secure connections")
-
-            if self.config.enforce_secure_connection and not self.config.use_ssl:
-                errors.append("Secure connection enforcement requires SSL/TLS")
-
-            # Connection validation
-            if self.config.reconnect_interval < 1.0:
-                errors.append("Reconnect interval must be at least 1 second")
-
-            if self.config.connection_refresh_interval < 300.0:
-                errors.append("Connection refresh interval must be at least 5 minutes")
-
-            if errors:
-                error_msg = "\n".join(errors)
-                self.show_error(
-                    "Validation Error", f"Configuration validation failed:\n\n{error_msg}"
-                )
-                return False
-
-            return True
-
-        except Exception as e:
-            _log.error(f"Error validating config: {e}")
-            self.show_error("Validation Error", f"Failed to validate configuration: {e}")
-            return False
 
     def validate_host(self) -> bool:
         """Validate host input"""
@@ -877,7 +787,6 @@ class LiveBroadcastConfigDialog(QDialog):
 
     def test_connection(self):
         """Test WebSocket connection with comprehensive error handling"""
-
         if not SOCKETIO_AVAILABLE:
             self.show_warning(
                 "Test Connection",
@@ -905,7 +814,6 @@ class LiveBroadcastConfigDialog(QDialog):
                 return
 
             # Start test in background
-            # QTimer.singleShot(100, lambda: self._perform_connection_test(host, port, path))
             self._start_connection_test(host, port, path)
 
         except Exception as e:
@@ -981,53 +889,6 @@ class LiveBroadcastConfigDialog(QDialog):
 
         except Exception as e:
             _log.error(f"Error setting up connection test: {e}")
-            self.config_tested.emit(False, f"Test setup error: {str(e)}")
-
-    def _perform_connection_test(self, host: str, port: int, path: str):
-        """Perform the actual connection test"""
-        try:
-            from .websocket_client import SocketIOBroadcaster
-            import asyncio
-            import threading
-
-            def test_connect():
-                try:
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-
-                    async def test():
-                        try:
-                            test_broadcaster = SocketIOBroadcaster(host, port, path)
-                            test_broadcaster.start()
-
-                            # Wait for connection
-                            await asyncio.sleep(2)
-
-                            if test_broadcaster.is_connected():
-                                test_broadcaster.stop()
-                                return True, "Connection successful"
-                            else:
-                                test_broadcaster.stop()
-                                return False, "Connection failed - no response from server"
-
-                        except Exception as e:
-                            return False, f"Connection failed: {str(e)}"
-
-                    result, message = loop.run_until_complete(test())
-                    loop.close()
-
-                    # Emit result signal
-                    self.config_tested.emit(result, message)
-
-                except Exception as e:
-                    self.config_tested.emit(False, f"Test error: {str(e)}")
-
-            thread = threading.Thread(target=test_connect)
-            thread.daemon = True
-            thread.start()
-
-        except Exception as e:
-            _log.error(f"Error performing connection test: {e}")
             self.config_tested.emit(False, f"Test setup error: {str(e)}")
 
     def _handle_test_result(self, success: bool, message: str):

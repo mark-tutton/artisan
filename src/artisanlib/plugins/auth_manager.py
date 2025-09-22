@@ -238,6 +238,11 @@ class GlobalAuthManager(QObject):
         if not self.current_token:
             return True
         return time.time() >= self.current_token.expires_at
+
+    def is_authenticated(self) -> bool:
+        """Check if user is authenticated"""
+        return self.get_valid_token() is not None
+    
     
     def _set_tokens(self, access_token: str, refresh_token: str, expires_in: int):
         """Set new tokens"""

@@ -296,5 +296,5 @@ class InventoryFetcher:
             return {"status": "error", "message": str(e)}
 
     def _get_auth_headers(self) -> Dict[str, str]:
-        """Get authentication headers - expects plugin to provide them"""`
+        """Get authentication headers - expects plugin to provide them"""
         return {}

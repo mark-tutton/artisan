@@ -3,6 +3,9 @@ import json
 import logging
 import time
 import weakref
+import uuid
+import os
+import sys
 from typing import Optional, Callable, List, Dict, Any
 from threading import Thread, Lock
 from contextlib import asynccontextmanager
@@ -79,17 +82,18 @@ class SocketIOBroadcaster(QObject):
         self.connection_refresh_interval = connection_refresh_interval
         self.reconnect_attempts = 0
 
+        # Generate stable unique client identifier
+        self.client_id = self._generate_stable_client_id()
+        
+        # Client identification data
+        self.client_info = self._generate_client_info()
+
         # Connection state
         self.sio: Optional[socketio.AsyncClient] = None
         self._is_connected = False
         self.is_running = False
         self._connection_start_time: Optional[float] = None
         self._last_connection_refresh = 0
-
-        # JWT token management
-        self._token_expiry: Optional[float] = None
-        self._token_refresh_attempts = 0
-        self._max_token_refresh_attempts = 3
 
         # PyQt threading support
         self._worker_thread: Optional[QThread] = None
@@ -99,7 +103,6 @@ class SocketIOBroadcaster(QObject):
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[Thread] = None
         self._shutdown_event: Optional[asyncio.Event] = None
-        self._refresh_timer: Optional[asyncio.Task] = None
 
         # Thread safety
         self._lock = Lock()
@@ -126,211 +129,85 @@ class SocketIOBroadcaster(QObject):
             "failed_connections": 0,
             "total_uptime": 0.0,
             "connection_refreshes": 0,
-            "token_refreshes": 0,
             "auth_failures": 0,
         }
 
         _log.debug(f"SocketIOBroadcaster initialized for {self.url}")
 
-    def update_auth_token(self, new_token: str) -> None:
-        """Update the JWT authentication token"""
+    def _generate_stable_client_id(self) -> str:
+        """Generate a stable unique client identifier"""
         try:
-            old_token = self.auth_token
-            self.auth_token = new_token
-            self._token_refresh_attempts = 0  # Reset refresh attempts
+            pid = os.getpid()
+            python_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+
+            stable_id = f"artisan_{pid}_{python_version}_{uuid.uuid4().hex[:12]}"
+            return stable_id
             
-            _log.debug("JWT token updated successfully")
-            
-            # If connected, try to refresh the connection with new token
-            if self._is_connected and self.sio and self._loop:
-                asyncio.run_coroutine_threadsafe(self._refresh_connection_with_new_token(), self._loop)
+        except Exception as e:
+            _log.warning(f"Could not generate stable client ID: {e}")
+            # Fallback to simple UUID
+            return f"artisan_{uuid.uuid4().hex[:16]}"
+
+    def _generate_client_info(self) -> Dict[str, Any]:
+        """Generate client identification information"""
+        try:
+            return {
+                "clientId": self.client_id,
+                "clientType": "artisan",
+                "clientVersion": "2.0.0",
+                "clientBuild": "artisan-live-broadcast-plugin",
+                "platform": "unknown",  
+                "platformVersion": "unknown",
+                "architecture": "unknown",
+                "hostname": "unknown",  
+                "deviceName": "artisan-client",
+                "deviceModel": "unknown",
+                "connectionType": "artisan_broadcast",
+                "capabilities": [
+                    "roast_data_broadcast",
+                    "roast_event_broadcast", 
+                    "monitoring_data_broadcast",
+                    "custom_event_broadcast",
+                    "roast_control_receive"
+                ],
+                "metadata": {
+                    "pythonVersion": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+                    "socketioVersion": getattr(socketio, '__version__', 'unknown') if socketio else 'not_available',
+                    "connectionTime": time.time(),
+                    "processId": os.getpid()
+                }
+            }
                 
         except Exception as e:
-            _log.debug(f"Error updating auth token: {e}")
-
-    async def _refresh_connection_with_new_token(self) -> None:
-        """Refresh connection with new JWT token"""
-        try:
-            if not self.sio or not self._is_connected:
-                return
-
-            _log.debug("Refreshing connection with new JWT token...")
-
-            # Disconnect and reconnect with new token
-            await self.sio.disconnect()
-            await asyncio.sleep(1)  
-
-            # Reconnect with new token
-            connect_kwargs = {
-                "wait_timeout": self.connection_timeout,
-                "socketio_path": self.socketio_path  
-            }
-            if self.auth_token:
-                connect_kwargs["auth"] = {"token": self.auth_token}
-                # connect_kwargs["headers"] = {"Authorization": f"Bearer {self.auth_token}"}
-                headers = {"Authorization": f"Bearer {self.auth_token}"}
-                if self.refresh_token:
-                    headers["x-refresh-token"] = self.refresh_token
-                connect_kwargs["headers"] = headers
-
-            await self.sio.connect(self.url, **connect_kwargs)
-            
-            self._stats["token_refreshes"] += 1
-            self._queue_signal("token_refreshed")
-            _log.debug("Connection refreshed with new JWT token successfully")
-
-        except Exception as e:
-            _log.debug(f"Failed to refresh connection with new token: {e}")
-            self._queue_signal("error", f"Token refresh failed: {e}")
-
-    async def _connect_with_auth(self) -> None:
-        """Connect to Socket.IO server with JWT authentication"""
-        try:
-            _log.debug(f"Starting connection to {self.url} with path {self.socketio_path}")
-            
-            # Validate JWT token if provided
-            if self.auth_token:
-                _log.debug("Validating JWT token...")
-                if not self._validate_jwt_token():
-                    raise ValueError("Invalid or expired JWT token")
-                _log.debug("JWT token validation passed")
-
-            # Setup client with authentication
-            client_kwargs = {
-                "logger": _log,
-                "engineio_logger": _log if hasattr(self, 'config') and getattr(self.config, "enable_debug_logging", False) else None,
-                "ping_timeout": self.connection_timeout,
-                "ping_interval": self.ping_interval,
-                "reconnection": True,
-                "reconnection_attempts": self.max_reconnect_attempts,
-                "reconnection_delay": self.reconnect_interval,
-                "reconnection_delay_max": 30.0,
+            _log.warning(f"Could not generate complete client info: {e}")
+            return {
+                "clientId": self.client_id,
+                "clientType": "artisan",
+                "clientVersion": "2.0.0",
+                "platform": "unknown",
+                "hostname": "unknown"
             }
 
-            _log.debug(f"Creating Socket.IO client with kwargs: {client_kwargs}")
-            self.sio = socketio.AsyncClient(**client_kwargs)
+    def get_client_id(self) -> str:
+        """Get the stable client identifier"""
+        return self.client_id
 
-            _log.debug("Setting up Socket.IO event handlers...")
-            self._setup_socketio_handlers()
+    def get_client_info(self) -> Dict[str, Any]:
+        """Get client identification information"""
+        return self.client_info.copy()
 
-            # Connect with authentication
-            connect_kwargs = {
-                "wait_timeout": self.connection_timeout,
-                "socketio_path": self.socketio_path
-            }
-
-            if self.auth_token:
-                connect_kwargs["auth"] = {"token": self.auth_token}
-                # connect_kwargs["headers"] = {"Authorization": f"Bearer {self.auth_token}"}
-                headers = {"Authorization": f"Bearer {self.auth_token}"}
-                if self.refresh_token:
-                    headers["x-refresh-token"] = self.refresh_token
-                connect_kwargs["headers"] = headers
-                
-                _log.debug(f"Connecting with JWT authentication: {self.auth_token[:20]}...")
-                _log.debug(f"Auth parameter: {connect_kwargs['auth']}")
-                _log.debug(f"Headers: {connect_kwargs['headers']}")
-            else:
-                _log.debug("Connecting without authentication...")
-
-            _log.debug(f"Connection kwargs: {connect_kwargs}")
-            _log.debug(f"Attempting connection to {self.url}")
-
-            await self.sio.connect(self.url, **connect_kwargs)
-
-            _log.debug("Socket.IO connect() call completed successfully")
-
-            # Start connection refresh timer
-            self._refresh_timer = asyncio.create_task(self._connection_refresh_loop())
-
-            # Wait for shutdown or disconnection
-            await self._shutdown_event.wait()
-
-        except Exception as e:
-            _log.debug(f"Socket.IO connection error: {e}")
-            _log.debug(f"Error type: {type(e)}")
-            _log.debug(f"Error details: {str(e)}")
+    def update_auth_tokens(self, auth_token: str, refresh_token: str):
+        """Update authentication tokens"""
+        self.auth_token = auth_token
+        self.refresh_token = refresh_token
+        
+        # If connected, might need to reconnect with new tokens
+        if self.is_connected():
+            _log.info("Updating auth tokens - reconnecting with new credentials")
+            self.disconnect()
+            # The reconnection logic will use the new tokens
             
-            # Check if it's an authentication error
-            if "unauthorized" in str(e).lower() or "401" in str(e):
-                self._stats["auth_failures"] += 1
-                self._queue_signal("auth_failed", f"Authentication failed: {e}")
-            else:
-                self._handle_connection_error(f"Connection error: {e}")
-
-            # Wait before reconnecting
-            if self.is_running:
-                await asyncio.sleep(self.reconnect_interval)
-    
-    def _validate_jwt_token(self) -> bool:
-        """Enhanced JWT token validation with issuer/audience support"""
-        try:
-            if not self.auth_token or not isinstance(self.auth_token, str):
-                return False
-
-            # Check if token has JWT structure
-            parts = self.auth_token.split('.')
-            if len(parts) != 3:
-                return False
-
-            # length validation
-            if len(self.auth_token) < 50:
-                return False
-
-            # Check for expiration and claims
-            try:
-                import base64
-                import json
-                
-                # Decode payload
-                payload = parts[1]
-                # Add padding
-                payload += '=' * (4 - len(payload) % 4)
-                decoded = base64.b64decode(payload)
-                payload_data = json.loads(decoded.decode('utf-8'))
-                
-                # Check expiration
-                if 'exp' in payload_data:
-                    exp_time = payload_data['exp']
-                    current_time = time.time()
-                    
-                    if current_time >= exp_time:
-                        _log.warning("JWT token has expired")
-                        return False
-                    
-                    # Set token expiry
-                    self._token_expiry = exp_time
-                
-                # Check issuer if configured
-                if hasattr(self, 'config') and hasattr(self.config, 'jwt_issuer'):
-                    expected_issuer = self.config.jwt_issuer
-                    if expected_issuer and payload_data.get('iss') != expected_issuer:
-                        _log.warning(f"JWT issuer mismatch: expected {expected_issuer}, got {payload_data.get('iss')}")
-                        return False
-                
-                # Check audience if configured
-                if hasattr(self, 'config') and hasattr(self.config, 'jwt_audience'):
-                    expected_audience = self.config.jwt_audience
-                    if expected_audience:
-                        token_audience = payload_data.get('aud')
-                        if isinstance(token_audience, list):
-                            if expected_audience not in token_audience:
-                                _log.warning(f"JWT audience not in allowed list: expected {expected_audience}, got {token_audience}")
-                                return False
-                        elif token_audience != expected_audience:
-                            _log.warning(f"JWT audience mismatch: expected {expected_audience}, got {token_audience}")
-                            return False
-                
-                _log.debug(f"JWT token validated successfully - exp: {payload_data.get('exp')}, iss: {payload_data.get('iss')}, aud: {payload_data.get('aud')}")
-                    
-            except Exception as e:
-                _log.debug(f"Could not decode JWT payload for validation: {e}")
-
-            return True
-
-        except Exception as e:
-            _log.debug(f"Error validating JWT token: {e}")
-            return False
+        self.token_refreshed.emit()
 
     def add_connection_handler(self, handler: Callable[[], None]) -> None:
         """Add handler for connection events"""
@@ -468,7 +345,6 @@ class SocketIOBroadcaster(QObject):
 
                 if self.auth_token:
                     connect_kwargs["auth"] = {"token": self.auth_token}
-                    # connect_kwargs["headers"] = {"Authorization": f"Bearer {self.auth_token}"}
                     headers = {"Authorization": f"Bearer {self.auth_token}"}
                     if self.refresh_token:
                         headers["x-refresh-token"] = self.refresh_token
@@ -476,20 +352,17 @@ class SocketIOBroadcaster(QObject):
                     
                     self.sio.auth = {"token": self.auth_token}
                     
-                    print(f"Connecting with JWT authentication: {self.auth_token[:20]}...")
-                    print(f"Auth parameter: {connect_kwargs['auth']}")
-                    print(f"Headers: {connect_kwargs['headers']}")
-                    print(f"Client auth: {self.sio.auth}")
+                    _log.debug(f"Connecting with JWT authentication: {self.auth_token[:20]}...")
+                    _log.debug(f"Auth parameter: {connect_kwargs['auth']}")
+                    _log.debug(f"Headers: {connect_kwargs['headers']}")
+                    _log.debug(f"Client auth: {self.sio.auth}")
 
-                print(f"Attempting to connect to {self.url} with path {self.socketio_path}")
-                print(f"Full connection kwargs: {connect_kwargs}")
+                _log.debug(f"Attempting to connect to {self.url} with path {self.socketio_path}")
+                _log.debug(f"Full connection kwargs: {connect_kwargs}")
                 
                 await self.sio.connect(self.url, **connect_kwargs)
 
                 _log.debug("Socket.IO connection established successfully")
-
-                # Start connection refresh timer
-                self._refresh_timer = asyncio.create_task(self._connection_refresh_loop())
 
                 # Wait for shutdown or disconnection
                 await self._shutdown_event.wait()
@@ -520,10 +393,18 @@ class SocketIOBroadcaster(QObject):
                 data = json.loads(message)  
                 event_type = data.get("type", "roast_data")
 
+                # Add client ID to message for server-side filtering
+                if isinstance(data, dict):
+                    data["senderClientId"] = self.client_id
+
                 asyncio.run_coroutine_threadsafe(self._emit_with_ack(event_type, data), self._loop)
             else:
+                message_data = {
+                    "data": message,
+                    "senderClientId": self.client_id
+                }
                 asyncio.run_coroutine_threadsafe(
-                    self._emit_with_ack("message", {"data": message}), self._loop
+                    self._emit_with_ack("message", message_data), self._loop
                 )
 
             self._mutex.lock()
@@ -644,6 +525,9 @@ class SocketIOBroadcaster(QObject):
                     except Exception as e:
                         _log.debug(f"Connection handler error: {e}")
 
+                # Send client identification
+                await self._send_client_identification()
+
                 _log.debug("Socket.IO connection fully established")
 
             @self.sio.event
@@ -687,15 +571,38 @@ class SocketIOBroadcaster(QObject):
                 else:
                     self._queue_signal("error", f"Connection error: {data}")
 
+            # Handle connection established response
+            @self.sio.event
+            async def connection_established(data):
+                _log.debug(f"Received connection_established: {data}")
+                if isinstance(data, dict):
+                    server_client_id = data.get("clientId")
+                    if server_client_id:
+                        _log.info(f"Server assigned client ID: {server_client_id}")
+                        # Update our client ID if server assigned a different one
+                        if server_client_id != self.client_id:
+                            _log.info(f"Updating client ID from {self.client_id} to {server_client_id}")
+                            self.client_id = server_client_id
+                            self.client_info["clientId"] = server_client_id
+
+            # Handle artisan identification response
+            @self.sio.event
+            async def artisan_identified(data):
+                _log.debug(f"Received artisan_identified: {data}")
+                if isinstance(data, dict):
+                    _log.info(f"Artisan client successfully identified: {data.get('message', 'OK')}")
+
             # JWT token refresh response
             @self.sio.event
-            async def token_refresh_response(data):
+            async def tokens_refreshed(data):
                 _log.debug("Received JWT token refresh response")
                 try:
-                    if isinstance(data, dict) and "new_token" in data:
-                        new_token = data["new_token"]
-                        self.update_auth_token(new_token)
-                        _log.debug("JWT token refreshed successfully")
+                    if isinstance(data, dict) and "accessToken" in data:
+                        new_token = data["accessToken"]
+                        new_refresh_token = data.get("refreshToken")
+                        self.update_auth_tokens(new_token, new_refresh_token)
+                        _log.debug("JWT tokens refreshed successfully")
+                        self._queue_signal("token_refreshed")
                     else:
                         _log.warning("Invalid token refresh response format")
                         
@@ -713,31 +620,82 @@ class SocketIOBroadcaster(QObject):
         except Exception as e:
             _log.debug(f"Error setting up Socket.IO handlers: {e}")
 
-    async def _handle_socketio_message(self, event: str, data: Any) -> None:
-        """Handle incoming Socket.IO messages"""
+    async def _send_client_identification(self) -> None:
+        """Send client identification to server"""
         try:
-            message_data = {"type": event, "data": data, "timestamp": time.time()}
+            if not self.sio or not self._is_connected:
+                _log.warning("Cannot send client identification: not connected")
+                return
 
-            _log.debug(f"Received Socket.IO event: {event} with data: {data}")
+            identification_data = {
+                "clientId": self.client_id,
+                "clientInfo": self.client_info,
+                "timestamp": time.time(),
+                "capabilities": self.client_info.get("capabilities", []),
+                "metadata": self.client_info.get("metadata", {})
+            }
 
-            self._mutex.lock()
-            try:
-                self._stats["messages_received"] += 1
-            finally:
-                self._mutex.unlock()
-
-            # Emit message signal
-            self._queue_signal("message", message_data)
-
-            # Call message callbacks
-            for callback in self._message_callbacks:
-                try:
-                    callback(message_data)
-                except Exception as e:
-                    _log.debug(f"Message callback error: {e}")
+            _log.debug(f"Sending client identification: {identification_data}")
+            await self.sio.emit("artisan_client_identification", identification_data)
+            _log.info(f"Client identification sent with ID: {self.client_id}")
 
         except Exception as e:
-            _log.debug(f"Error handling Socket.IO message: {e}")
+            _log.error(f"Failed to send client identification: {e}")
+
+    # async def _handle_socketio_message(self, event: str, data: Any) -> None:
+    #     """Handle incoming Socket.IO messages"""
+    #     try:
+    #         # Filter out data messages for Artisan clients - they should only receive control messages
+    #         if event in ["monitoring_data", "roast_event", "roast_data"]:
+    #             _log.debug(f"Ignoring {event} message - Artisan client should not receive data messages")
+    #             return
+            
+    #         message_data = {"type": event, "data": data, "timestamp": time.time()}
+
+    #         _log.debug(f"Received Socket.IO event: {event} with data: {data}")
+
+    #         self._mutex.lock()
+    #         try:
+    #             self._stats["messages_received"] += 1
+    #         finally:
+    #             self._mutex.unlock()
+
+    #         # Emit message signal
+    #         self._queue_signal("message", message_data)
+
+    #         # Call message callbacks
+    #         for callback in self._message_callbacks:
+    #             try:
+    #                 callback(message_data)
+    #             except Exception as e:
+    #                 _log.debug(f"Message callback error: {e}")
+
+    #     except Exception as e:
+    #         _log.debug(f"Error handling Socket.IO message: {e}")
+
+    async def _handle_socketio_message(self, event: str, data: Any) -> None:
+        """Handle incoming Socket.IO messages with filtering for Artisan clients"""
+        try:
+            # Artisan clients should only receive roast_control messages
+            if event in ['monitoring_data', 'roast_data', 'roast_event']:
+                self.logger.debug(f"Ignoring {event} message - Artisan client should not receive data messages")
+                return
+                
+            # Only process roast_control messages
+            if event == 'roast_control':
+                self.logger.debug(f"Processing roast_control message: {data}")
+                # Process the control message
+                if self.message_callbacks:
+                    for callback in self.message_callbacks:
+                        try:
+                            callback(data)
+                        except Exception as e:
+                            self.logger.error(f"Error in message callback: {e}")
+            else:
+                self.logger.debug(f"Ignoring unknown event: {event}")
+                
+        except Exception as e:
+            self.logger.error(f"Error handling Socket.IO message: {e}")
 
     async def _emit_with_ack(self, event: str, data: Any) -> None:
         """Emit Socket.IO event with acknowledgment"""
@@ -755,84 +713,6 @@ class SocketIOBroadcaster(QObject):
     def _ack_callback(self, *args):
         """Handle Socket.IO acknowledgment"""
         _log.debug(f"Socket.IO acknowledgment received: {args}")
-
-    async def _connection_refresh_loop(self) -> None:
-        """Periodically refresh connections and JWT tokens for long-lived sessions"""
-        try:
-            while self._is_connected and not self._shutdown_event.is_set():
-                await asyncio.sleep(self.connection_refresh_interval)
-
-                if self._is_connected and self.sio:
-                    _log.debug("Refreshing Socket.IO connection...")
-
-                    try:
-                        # Check if JWT token needs refresh
-                        if self.auth_token and self._token_expiry:
-                            current_time = time.time()
-                            time_until_expiry = self._token_expiry - current_time
-                            
-                            # Refresh if token expires within 5 minutes
-                            if time_until_expiry < 300:
-                                _log.debug("JWT token expiring soon, attempting refresh...")
-                                await self._attempt_token_refresh()
-
-                        # Disconnect and reconnect to refresh connection
-                        await self.sio.disconnect()
-                        await asyncio.sleep(1)  # Brief pause
-                        
-                        # Reconnect with current token
-                        connect_kwargs = {
-                            "wait_timeout": self.connection_timeout,
-                            "socketio_path": self.socketio_path 
-                        }
-                        if self.auth_token:
-                            connect_kwargs["auth"] = {"token": self.auth_token}
-                            # connect_kwargs["headers"] = {"Authorization": f"Bearer {self.auth_token}"}
-                            headers = {"Authorization": f"Bearer {self.auth_token}"}
-                            if self.refresh_token:
-                                headers["x-refresh-token"] = self.refresh_token
-                            connect_kwargs["headers"] = headers
-
-                        await self.sio.connect(self.url, **connect_kwargs)
-
-                        self._mutex.lock()
-                        try:
-                            self._stats["connection_refreshes"] += 1
-                            self._last_connection_refresh = time.time()
-                        finally:
-                            self._mutex.unlock()
-                        _log.debug("Socket.IO connection refreshed successfully")
-
-                    except Exception as e:
-                        _log.debug(f"Failed to refresh Socket.IO connection: {e}")
-                        self._queue_signal("error", f"Connection refresh failed: {e}")
-
-        except asyncio.CancelledError:
-            _log.debug("Connection refresh loop cancelled")
-
-    async def _attempt_token_refresh(self) -> None:
-        """Attempt to refresh the JWT token"""
-        try:
-            if self._token_refresh_attempts >= self._max_token_refresh_attempts:
-                _log.debug("Max JWT token refresh attempts reached")
-                self._queue_signal("auth_failed", "Max token refresh attempts reached")
-                return
-
-            self._token_refresh_attempts += 1
-            _log.debug(f"Attempting JWT token refresh (attempt {self._token_refresh_attempts})")
-
-            # Emit token refresh request to server
-            if self.sio:
-                await self.sio.emit("token_refresh_request", {
-                    "current_token": self.auth_token,
-                    "timestamp": time.time()
-                })
-
-            # TODO: build out token refresh logic
-
-        except Exception as e:
-            _log.debug(f"Failed to attempt token refresh: {e}")
-            self._queue_signal("error", f"Token refresh attempt failed: {e}")
 
     def _handle_connection_error(self, error_msg: str) -> None:
         """Handle connection errors and update state"""
@@ -875,66 +755,6 @@ class SocketIOBroadcaster(QObject):
             _log.debug(
                 f"Reconnection attempt {self.reconnect_attempts}/{self.max_reconnect_attempts}"
             )
-
-# rooms
-    def join_room(self, room_name: str):
-        """Join a specific room"""
-        if self.socket and self.socket.connected:
-            self.socket.emit('join_' + room_name.lower().replace(' ', '_'))
-            self.logger.info(f"Joining room: {room_name}")
-    
-    def leave_room(self, room_name: str):
-        """Leave a specific room"""
-        if self.socket and self.socket.connected:
-            self.socket.emit('leave_' + room_name.lower().replace(' ', '_'))
-            self.logger.info(f"Leaving room: {room_name}")
-    
-    def get_room_info(self):
-        """Get current room information"""
-        if self.socket and self.socket.connected:
-            self.socket.emit('get_room_info')
-    
-    def setup_room_handlers(self):
-        """Set up room-related event handlers"""
-        if not self.socket:
-            return
-            
-        # Room join/leave confirmations
-        self.socket.on('room_joined', self._on_room_joined)
-        self.socket.on('room_left', self._on_room_left)
-        self.socket.on('room_info', self._on_room_info)
-        self.socket.on('room_member_joined', self._on_room_member_joined)
-        self.socket.on('room_member_left', self._on_room_member_left)
-    
-    def _on_room_joined(self, data):
-        """Handle room join confirmation"""
-        self.logger.info(f"Joined room: {data.get('room')}")
-        if hasattr(self, 'on_room_joined'):
-            self.on_room_joined(data)
-    
-    def _on_room_left(self, data):
-        """Handle room leave confirmation"""
-        self.logger.info(f"Left room: {data.get('room')}")
-        if hasattr(self, 'on_room_left'):
-            self.on_room_left(data)
-    
-    def _on_room_info(self, data):
-        """Handle room information response"""
-        self.logger.info(f"Room info: {data}")
-        if hasattr(self, 'on_room_info'):
-            self.on_room_info(data)
-    
-    def _on_room_member_joined(self, data):
-        """Handle room member joined notification"""
-        self.logger.info(f"Member joined room {data.get('room')}: {data.get('username')}")
-        if hasattr(self, 'on_room_member_joined'):
-            self.on_room_member_joined(data)
-    
-    def _on_room_member_left(self, data):
-        """Handle room member left notification"""
-        self.logger.info(f"Member left room {data.get('room')}: {data.get('username')}")
-        if hasattr(self, 'on_room_member_left'):
-            self.on_room_member_left(data)
 
 # Check if socketio is available and log a warning if not
 if not SOCKETIO_AVAILABLE:

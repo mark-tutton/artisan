@@ -185,13 +185,23 @@ class LiveBroadcastPlugin(PluginBase):
         """Worker thread method for starting broadcaster"""
         try:
             if SOCKETIO_AVAILABLE and not self.broadcaster:
+                # Get current auth tokens from global auth manager
+                auth_token = self.get_auth_token()
+                refresh_token = self.auth_manager.current_token.refresh_token if self.auth_manager.current_token else ""
+
+                # Update config with current tokens
+                self.config.auth_token = auth_token or ""
+                self.config.refresh_token = refresh_token
+                
                 self.broadcaster = SocketIOBroadcaster(
                     host=self.config.server_host,
                     port=self.config.server_port,
                     path=self.config.socketio_path,  # Use Socket.IO path
                     secure=self.config.use_ssl,  # Enable SSL/WSS
-                    auth_token=self.config.auth_token,  # JWT authentication
-                    refresh_token=self.config.refresh_token,
+                    # auth_token=self.config.auth_token,  # JWT authentication
+                    auth_token=auth_token,
+                    # refresh_token=self.config.refresh_token,
+                    refresh_token=refresh_token,
                     reconnect_interval=self.config.reconnect_interval,
                     max_reconnect_attempts=self.config.max_reconnect_attempts,
                     connection_timeout=self.config.connection_timeout,
@@ -381,11 +391,79 @@ class LiveBroadcastPlugin(PluginBase):
         except Exception as e:
             self._record_error("ControlSignalError", str(e))
 
+    # def _connect_event_signals(self, qmc) -> None:
+    #     """Connect to button clicks and method calls"""
+    #     try:
+    #         self.logger.info(
+    #             "Setting up event connections using button clicks and method monitoring..."
+    #         )
+
+    #         # Initialize event state tracking
+    #         self.last_event_states = {
+    #             "charge": False,
+    #             "dry_end": False,
+    #             "fc_start": False,
+    #             "fc_end": False,
+    #             "sc_start": False,
+    #             "sc_end": False,
+    #             "drop": False,
+    #             "cool_end": False,
+    #         }
+
+    #         # For Artisan to External: Connect to Artisan btn clicks
+    #         button_connections = [
+    #             ("buttonCHARGE", "charge"),
+    #             ("buttonDRY", "dry_end"),
+    #             ("buttonFCs", "fc_start"),
+    #             ("buttonFCe", "fc_end"),
+    #             ("buttonSCs", "sc_start"),
+    #             ("buttonSCe", "sc_end"),
+    #             ("buttonDROP", "drop"),
+    #             ("buttonCOOL", "cool_end"),
+    #         ]
+
+    #         connected_count = 0
+    #         for button_name, event_name in button_connections:
+    #             try:
+    #                 # Get the button from the main window
+    #                 if hasattr(self.main_window, button_name):
+    #                     button = getattr(self.main_window, button_name)
+
+    #                     # Create a wrapper that will broadcast the event
+    #                     def create_event_wrapper(event_name):
+    #                         def event_wrapper():
+    #                             self.logger.info(f"🎯 Button clicked: {event_name}")
+    #                             self._broadcast_roast_event(event_name)
+    #                             # Update local state
+    #                             self.last_event_states[event_name] = True
+
+    #                         return event_wrapper
+
+    #                     # Connect the wrapper to the button
+    #                     button.clicked.connect(create_event_wrapper(event_name))
+    #                     connected_count += 1
+    #                     self.logger.info(f"✅ Connected to {button_name} for {event_name}")
+
+    #                 else:
+    #                     self.logger.warning(f"⚠️ Button {button_name} not found on main window")
+
+    #             except Exception as e:
+    #                 self.logger.warning(f"⚠️ Failed to connect {button_name}: {e}")
+
+    #         self.logger.info(
+    #             f"✅ Button connections: {connected_count}/{len(button_connections)} connected"
+    #         )
+
+    #         self._setup_method_monitoring(qmc)
+
+    #     except Exception as e:
+    #         self._record_error("EventSignalError", str(e))
+
     def _connect_event_signals(self, qmc) -> None:
         """Connect to button clicks and method calls"""
         try:
             self.logger.info(
-                "Setting up event connections using button clicks and method monitoring..."
+                "Setting up event connections using method monitoring only..."
             )
 
             # Initialize event state tracking
@@ -400,54 +478,17 @@ class LiveBroadcastPlugin(PluginBase):
                 "cool_end": False,
             }
 
-            # For Artisan to External: Connect to Artisan btn clicks
-            button_connections = [
-                ("buttonCHARGE", "charge"),
-                ("buttonDRY", "dry_end"),
-                ("buttonFCs", "fc_start"),
-                ("buttonFCe", "fc_end"),
-                ("buttonSCs", "sc_start"),
-                ("buttonSCe", "sc_end"),
-                ("buttonDROP", "drop"),
-                ("buttonCOOL", "cool_end"),
-            ]
-
-            connected_count = 0
-            for button_name, event_name in button_connections:
-                try:
-                    # Get the button from the main window
-                    if hasattr(self.main_window, button_name):
-                        button = getattr(self.main_window, button_name)
-
-                        # Create a wrapper that will broadcast the event
-                        def create_event_wrapper(event_name):
-                            def event_wrapper():
-                                self.logger.info(f"🎯 Button clicked: {event_name}")
-                                self._broadcast_roast_event(event_name)
-                                # Update local state
-                                self.last_event_states[event_name] = True
-
-                            return event_wrapper
-
-                        # Connect the wrapper to the button
-                        button.clicked.connect(create_event_wrapper(event_name))
-                        connected_count += 1
-                        self.logger.info(f"✅ Connected to {button_name} for {event_name}")
-
-                    else:
-                        self.logger.warning(f"⚠️ Button {button_name} not found on main window")
-
-                except Exception as e:
-                    self.logger.warning(f"⚠️ Failed to connect {button_name}: {e}")
-
-            self.logger.info(
-                f"✅ Button connections: {connected_count}/{len(button_connections)} connected"
-            )
-
+            # Use method monitoring only - this catches all event marking regardless of source
             self._setup_method_monitoring(qmc)
 
         except Exception as e:
             self._record_error("EventSignalError", str(e))
+
+    def _check_event_states(self) -> None:
+        """Check event states by monitoring timeindex array - DISABLED to prevent duplicates"""
+        # This method is disabled to prevent duplicate event broadcasting
+        # Method monitoring handles all event detection
+        pass
 
     def _setup_method_monitoring(self, qmc) -> None:
         """Monitor qmc methods to detect when events are marked"""
@@ -1406,88 +1447,6 @@ class LiveBroadcastPlugin(PluginBase):
             self._record_error("MonitoringStateError", str(e))
             return {}
 
-    # def _get_extra_sensor_values(self, qmc) -> Dict[str, Any]:
-    #     """Get extra sensor values"""
-    #     try:
-    #         sensor_values = {
-    #             "et_temperature": None,
-    #             "bt_temperature": None,
-    #             "ambient_temperature": None,
-    #             "ambient_pressure": None,
-    #             "ambient_humidity": None,
-    #             "extra_sensors": {"extra1_sensors": {}, "extra2_sensors": {}, "all_sensors": {}},
-    #         }
-
-    #         # Get ET and BT temperatures
-    #         try:
-    #             if hasattr(qmc, "RTtemp1"):
-    #                 sensor_values["et_temperature"] = qmc.RTtemp1
-    #             if hasattr(qmc, "RTtemp2"):
-    #                 sensor_values["bt_temperature"] = qmc.RTtemp2
-    #         except Exception as e:
-    #             self._record_error("ETBTError", str(e))
-
-    #         # Get ambient values
-    #         try:
-    #             if hasattr(qmc, "ambientTemp"):
-    #                 sensor_values["ambient_temperature"] = qmc.ambientTemp
-    #             if hasattr(qmc, "pressure"):
-    #                 sensor_values["ambient_pressure"] = qmc.pressure
-    #             if hasattr(qmc, "humidity"):
-    #                 sensor_values["ambient_humidity"] = qmc.humidity
-    #         except Exception as e:
-    #             self._record_error("AmbientError", str(e))
-
-    #         # Get extra sensor values
-    #         try:
-    #             if hasattr(qmc, "extratemp1"):
-    #                 for i, temp in enumerate(qmc.extratemp1):
-    #                     if temp is not None and temp != 0:
-    #                         sensor_name = f"sensor_{i}"
-    #                         if hasattr(qmc, "extraname1") and i < len(qmc.extraname1):
-    #                             sensor_name = qmc.extraname1[i] or f"sensor_{i}"
-
-    #                         sensor_values["extra_sensors"]["extra1_sensors"][sensor_name] = {
-    #                             "name": sensor_name,
-    #                             "temperature": temp,
-    #                             "unit": "°F",
-    #                         }
-
-    #                         sensor_values["extra_sensors"]["all_sensors"][sensor_name] = {
-    #                             "type": "extra1",
-    #                             "index": i,
-    #                             "temperature": temp,
-    #                             "unit": "°F",
-    #                         }
-
-    #             if hasattr(qmc, "extratemp2"):
-    #                 for i, temp in enumerate(qmc.extratemp2):
-    #                     if temp is not None and temp != 0:
-    #                         sensor_name = f"sensor_{i}"
-    #                         if hasattr(qmc, "extraname2") and i < len(qmc.extraname2):
-    #                             sensor_name = qmc.extraname2[i] or f"sensor_{i}"
-
-    #                         sensor_values["extra_sensors"]["extra2_sensors"][sensor_name] = {
-    #                             "name": sensor_name,
-    #                             "temperature": temp,
-    #                             "unit": "°F",
-    #                         }
-
-    #                         sensor_values["extra_sensors"]["all_sensors"][sensor_name] = {
-    #                             "type": "extra2",
-    #                             "index": i,
-    #                             "temperature": temp,
-    #                             "unit": "°F",
-    #                         }
-    #         except Exception as e:
-    #             self._record_error("ExtraSensorValuesError", str(e))
-
-    #         return sensor_values
-
-    #     except Exception as e:
-    #         self._record_error("SensorValuesError", str(e))
-    #         return {}
-
 
     def _get_extra_sensor_values(self, qmc) -> Dict[str, Any]:
         """Get extra sensor values including raw values for non-temperature sensors"""
@@ -2038,13 +1997,23 @@ class LiveBroadcastPlugin(PluginBase):
 
             self._change_broadcast_state(BroadcastState.CONNECTING)
 
+            # Get current auth tokens from global auth manager
+            auth_token = self.get_auth_token()
+            refresh_token = self.auth_manager.current_token.refresh_token if self.auth_manager.current_token else ""
+            
+            # Update config with current tokens
+            self.config.auth_token = auth_token or ""
+            self.config.refresh_token = refresh_token
+
             self.broadcaster = SocketIOBroadcaster(
                 host=self.config.server_host,
                 port=self.config.server_port,
                 path=self.config.socketio_path,  # Use Socket.IO path
                 secure=self.config.use_ssl,  # Enable SSL/WSS
-                auth_token=self.config.auth_token,  # JWT authentication
-                refresh_token=self.config.refresh_token,
+                # auth_token=self.config.auth_token,  # JWT authentication
+                auth_token=auth_token,
+                # refresh_token=self.config.refresh_token,
+                refresh_token=refresh_token,
                 reconnect_interval=self.config.reconnect_interval,
                 max_reconnect_attempts=self.config.max_reconnect_attempts,
                 connection_refresh_interval=self.config.connection_refresh_interval,
@@ -2234,12 +2203,18 @@ class LiveBroadcastPlugin(PluginBase):
                     self._handle_pong(message_data)
                 elif event_name == "error":
                     self._handle_server_error(message_data)
-                elif event_name == "monitoring_data":
-                    self._handle_monitoring_data(message_data)
-                elif event_name == "roast_event":
-                    self._handle_roast_event(message_data)
-                elif event_name == "roast_data":
-                    self._handle_roast_data_message(message_data)
+                # elif event_name == "monitoring_data":
+                #     self._handle_monitoring_data(message_data)
+                # elif event_name == "roast_event":
+                #     self._handle_roast_event(message_data)
+                # elif event_name == "roast_data":
+                #     self._handle_roast_data_message(message_data)
+                # else:
+                #     self.logger.warning(f"Unknown Socket.IO event: {event_name}")
+                # return
+                elif event_name in ["monitoring_data", "roast_event", "roast_data"]:
+                    # Ignore data messages - Artisan client should not receive its own data
+                    self.logger.debug(f"Ignoring {event_name} message - Artisan client should not receive data messages")
                 else:
                     self.logger.warning(f"Unknown Socket.IO event: {event_name}")
                 return
@@ -2280,12 +2255,16 @@ class LiveBroadcastPlugin(PluginBase):
                 self._handle_pong(data)
             elif msg_type == "error":
                 self._handle_server_error(data)
-            elif msg_type == "monitoring_data":
-                self._handle_monitoring_data(data)
-            elif msg_type == "roast_event":
-                self._handle_roast_event(data)
-            elif msg_type == "roast_data":
-                self._handle_roast_data_message(data)
+            # elif msg_type == "monitoring_data":
+            #     self._handle_monitoring_data(data)
+            # elif msg_type == "roast_event":
+            #     self._handle_roast_event(data)
+            # elif msg_type == "roast_data":
+            #     self._handle_roast_data_message(data)
+            # else:
+            elif msg_type in ["monitoring_data", "roast_event", "roast_data"]:
+                # Ignore data messages - Artisan client should not receive its own data
+                self.logger.debug(f"Ignoring {msg_type} message - Artisan client should not receive data messages")
             else:
                 self.logger.warning(f"Unknown message type: {msg_type}")
 
