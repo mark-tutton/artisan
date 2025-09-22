@@ -1,5 +1,6 @@
 import logging
 import time
+import requests
 from typing import Dict, List, Any, Optional
 
 try:
@@ -51,6 +52,7 @@ class InventoryFetcherPlugin(ArtisanPlugin):
         self._last_fetch_time = 0
         self._fetch_interval = 300  # 5 minutes between fetches
         
+        
     def initialize(self, main_window) -> None:
         """Initialize the plugin"""
         super().initialize(main_window)
@@ -74,6 +76,35 @@ class InventoryFetcherPlugin(ArtisanPlugin):
         # Create new fetcher
         self.fetcher = InventoryFetcher(self.config)
         self.logger.info("Created new inventory fetcher with connection pooling")
+
+ 
+    def _on_auth_success_impl(self, access_token: str, refresh_token: str):
+        """Handle successful authentication"""
+        self.logger.info("Authentication successful - recreating fetcher")
+        
+        # Recreate fetcher with new tokens
+        if self.config.get_effective_url():
+            self._create_fetcher()
+
+
+    
+    def _on_token_refreshed_impl(self, access_token: str, refresh_token: str):
+        """Handle token refresh"""
+        self.logger.info("Token refreshed - recreating fetcher")
+        
+        # Recreate fetcher with new tokens
+        if self.config.get_effective_url():
+            self._create_fetcher()
+
+    def _on_token_expired_impl(self):
+        """Handle token expiration"""
+        self.logger.warning("Token expired - clearing fetcher")
+        
+        # Close fetcher since no authenticate
+        if self.fetcher:
+            self.fetcher.close()
+            self.fetcher = None
+
     
     def cleanup(self) -> None:
         """Cleanup the plugin"""
@@ -140,54 +171,51 @@ class InventoryFetcherPlugin(ArtisanPlugin):
 
 
     def fetch_beans(self):
-        """Fetch coffees from server using worker thread"""
-        if not self.fetcher:
-            QMessageBox.warning(self.main_window, "Warning", "Please configure server URL first!")
-            return
-
-        # Check if fetch is already in progress
+        """Fetch beans data from server"""
         if self._fetch_in_progress:
-            self.logger.info("Fetch already in progress, skipping")
+            self.logger.warning("Fetch already in progress, skipping")
             return
 
-        # Check if enough time has passed since last fetch
-        current_time = time.time()
-        if current_time - self._last_fetch_time < self._fetch_interval:
-            self.logger.info("Fetch skipped - too soon since last fetch")
+        if not self.fetcher:
+            self.logger.error("No fetcher available - check server configuration")
             return
 
+        # Check if there is authentication
+        if not self.is_authenticated():
+            self.logger.warning("No authentication available for inventory fetch")
+            return
+
+        self._fetch_in_progress = True
+        self.logger.info("Starting beans fetch...")
+
+        # Execute fetch in worker thread
+        self.execute_in_worker("fetch_beans", self._fetch_beans_worker)
+
+
+    def _fetch_beans_worker(self):
+        """Worker method for fetching beans"""
         try:
-            self._fetch_in_progress = True
-            self.logger.info("Starting inventory fetch in worker thread")
+            # Get auth headers from global auth manager
+            headers = self.get_auth_headers()
             
-            # Use worker thread for the fetch operation
-            self.execute_in_worker("fetch_inventory", self._fetch_beans_worker)
+            # Pass headers to fetcher by updating its session
+            if self.fetcher and headers:
+                self.fetcher.session.headers.update(headers)
             
+            result = self.fetcher.fetch_beans()
+            if result and "data" in result:
+                beans_data = result["data"] 
+                self.beans_data = beans_data
+                self.signals.fetch_completed.emit(beans_data)
+                self.logger.info(f"Successfully fetched {len(beans_data)} beans")
+            else:
+                self.logger.warning("No beans data received")
+                self.signals.fetch_failed.emit("No beans data received")
         except Exception as e:
+            self.logger.error(f"Failed to fetch beans: {e}")
+            self.signals.fetch_failed.emit(str(e))
+        finally:
             self._fetch_in_progress = False
-            self._record_error("FetchStartError", str(e))
-            self.logger.error(f"Failed to start fetch: {e}")
-
-    def _fetch_beans_worker(self) -> List[Dict[str, Any]]:
-        """Worker thread method for fetching beans"""
-        try:
-            self.logger.info("Fetching coffees from server in worker thread")
-            
-            # Emit progress signal
-            self.signals.fetch_progress.emit(10)
-            
-            # Fetch beans with progress updates
-            result = self.fetcher.fetch_all_beans(batch_size=1000)
-            
-            # Emit progress signal
-            self.signals.fetch_progress.emit(100)
-            
-            self.logger.info(f"Successfully fetched {len(result)} coffees in worker thread")
-            return result
-            
-        except Exception as e:
-            self.logger.error(f"Failed to fetch coffees in worker thread: {e}")
-            raise
 
     def _on_fetch_completed(self, result: List[Dict[str, Any]]) -> None:
         """Handle fetch completion in main thread"""
@@ -224,9 +252,62 @@ class InventoryFetcherPlugin(ArtisanPlugin):
             self._record_error("FetchFailureError", str(e))
             self.logger.error(f"Error handling fetch failure: {e}")
 
+    def get_auth_headers(self) -> Dict[str, str]:
+        """Get authentication headers for API calls"""
+        token = self.get_auth_token()
+        if token:
+            return {"Authorization": f"Bearer {token}"}
+        return {}
+
+    def make_authenticated_request(self, url: str, method: str = "GET", **kwargs) -> Optional[requests.Response]:
+        """Make an authenticated API request"""
+        headers = self.get_auth_headers()
+        if 'headers' in kwargs:
+            headers.update(kwargs['headers'])
+        kwargs['headers'] = headers
+        
+        try:
+            if method.upper() == "GET":
+                return requests.get(url, **kwargs)
+            elif method.upper() == "POST":
+                return requests.post(url, **kwargs)
+            elif method.upper() == "PUT":
+                return requests.put(url, **kwargs)
+            elif method.upper() == "DELETE":
+                return requests.delete(url, **kwargs)
+        except Exception as e:
+            self.logger.error(f"Authenticated request failed: {e}")
+            return None
+
     def refresh_beans(self):
         """Refresh beans data"""
         self.fetch_beans()
+
+    def health_check(self):
+        """Perform health check on server"""
+        if not self.fetcher:
+            self.logger.error("No fetcher available")
+            return
+        
+        try:
+            self.logger.info("Starting health check")
+            result = self.fetcher.health_check()
+            
+            if "error" in result:
+                error_msg = f"Health check failed: {result['error']}"
+                self.logger.error(error_msg)
+                QMessageBox.warning(self.main_window, "Health Check Failed", error_msg)
+            else:
+                self.logger.info("Health check successful")
+                QMessageBox.information(self.main_window, "Health Check", "Server is healthy")
+        
+        except Exception as e:
+            error_msg = f"Health check error: {e}"
+            self.logger.error(error_msg)
+            QMessageBox.critical(self.main_window, "Health Check Error", error_msg)
+    
+
+    
     
     def get_beans_data(self) -> List[Dict[str, Any]]:
         """Get current beans data"""
@@ -257,7 +338,7 @@ class InventoryFetcherPlugin(ArtisanPlugin):
         """Get selected bean data from combo box"""
         try:
             index = combo_box.currentIndex()
-            if index >= 0:  # Changed from > 0 to >= 0 since we removed placeholder
+            if index >= 0:  
                 return combo_box.itemData(index)
             return None
         except Exception as e:
@@ -333,7 +414,7 @@ class InventoryFetcherPlugin(ArtisanPlugin):
             self.logger.error(f"Error showing about dialog: {e}")
 
     def test_connection(self):
-        """Test connection to server with Gateway validation"""
+        """Test connection to server"""
         if not self.fetcher:
             QMessageBox.warning(self.main_window, "Warning", "Please configure server URL first!")
             return
@@ -341,25 +422,12 @@ class InventoryFetcherPlugin(ArtisanPlugin):
         try:
             # Test basic connection
             if self.fetcher.test_connection():
-                # If using gateway with JWT, also validate the token
-                if (self.config.use_gateway and 
-                    self.config.gateway_auth_type in ["jwt", "google"] and 
-                    self.config.jwt_token):
-                    validation_result = self.fetcher.validate_jwt_token()
-                    if validation_result.get("valid"):
-                        QMessageBox.information(self.main_window, "Success", 
-                            "Gateway connection successful and JWT token is valid!")
-                    else:
-                        QMessageBox.warning(self.main_window, "Warning", 
-                            f"Gateway connection successful but JWT token validation failed: {validation_result.get('error')}")
-                else:
-                    QMessageBox.information(self.main_window, "Success", "Connection successful!")
+                QMessageBox.information(self.main_window, "Success", "Connection successful!")
             else:
                 QMessageBox.critical(self.main_window, "Error", "Connection failed!")
                 
         except Exception as e:
             QMessageBox.critical(self.main_window, "Error", f"Connection test failed: {e}")
-
 
     def get_plugin_status(self) -> Dict[str, Any]:
         """Get plugin status for monitoring"""
@@ -376,13 +444,9 @@ class InventoryFetcherPlugin(ArtisanPlugin):
                 "beans_count": len(self.beans_data),
                 "fetch_in_progress": self._fetch_in_progress,
                 "last_fetch_time": self._last_fetch_time,
-                "use_gateway": self.config.use_gateway,
                 "gateway_url": self.config.gateway_url,
-                "gateway_auth_type": self.config.gateway_auth_type,
-                "server_url": self.config.server_url if not self.config.use_gateway else None,
-                "auth_type": self.config.auth_type if not self.config.use_gateway else self.config.gateway_auth_type,
-                "jwt_configured": bool(self.config.jwt_token),
-                "use_ssl": self.config.use_ssl,
+                "health_check_enabled": self.config.health_check_enabled,
+                "health_check_url": self.config.health_check_url,
                 "auto_fetch_enabled": self.config.auto_fetch_on_startup,
                 "worker_thread_running": self._worker_thread.isRunning() if self._worker_thread else False,
                 "recent_errors": [
@@ -394,17 +458,6 @@ class InventoryFetcherPlugin(ArtisanPlugin):
                     for error in self.errors[-5:] 
                 ]
             }
-            
-            # Add JWT validation status 
-            if self.fetcher and self.config.use_gateway and self.config.gateway_auth_type in ["jwt", "google"]:
-                try:
-                    validation_result = self.fetcher.validate_jwt_token()
-                    status["jwt_valid"] = validation_result.get("valid", False)
-                    if not validation_result.get("valid"):
-                        status["jwt_error"] = validation_result.get("error", "Unknown error")
-                except Exception as e:
-                    status["jwt_valid"] = False
-                    status["jwt_error"] = str(e)
             
             return status
             

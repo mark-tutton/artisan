@@ -101,7 +101,7 @@ except Exception: # pylint: disable=broad-except
 QtWebEngineSupport:bool = False # set to True if the QtWebEngine was successfully imported
 
 try:
-    from PyQt6.QtWidgets import (QApplication, QWidget, QMessageBox, QLabel, QMainWindow, QFileDialog, QGraphicsDropShadowEffect, # @Reimport @UnresolvedImport @UnusedImport # pylint: disable=import-error
+    from PyQt6.QtWidgets import (QApplication, QWidget, QMessageBox, QLabel, QMainWindow, QFileDialog, QDialog, QGraphicsDropShadowEffect, # @Reimport @UnresolvedImport @UnusedImport # pylint: disable=import-error
                              QInputDialog, QGroupBox, QLineEdit, # @Reimport @UnresolvedImport @UnusedImport
                              QSizePolicy, QVBoxLayout, QHBoxLayout, QPushButton, # @Reimport @UnresolvedImport @UnusedImport
                              QLCDNumber, QSpinBox, QComboBox, # @Reimport @UnresolvedImport @UnusedImport
@@ -957,6 +957,8 @@ import plus.schedule
 
 # import plugins
 from artisanlib.plugins.manager import PluginManager
+from artisanlib.plugins.auth_manager import GlobalAuthManager
+
 
 
 
@@ -1068,16 +1070,143 @@ class VMToolbar(NavigationToolbar): # pylint: disable=abstract-method
         self._add_custom_actions()
 
 
+    
 # TOOLBAR PLUGIN STATUS - TODO: move to a separate file
     def _add_custom_actions(self):
         """Add custom toolbar actions"""
         self.addSeparator()
+
+        # Auth
+        self._add_auth_actions()
         
         # Plugin Status Group
         self._add_plugin_status_actions()
         
         self.addSeparator()
-        
+
+
+    def _add_auth_actions(self):
+        """Add authentication actions to toolbar"""
+        try:
+            from artisanlib.plugins.auth_manager import GlobalAuthManager
+            self.auth_manager = GlobalAuthManager()
+            
+            # Auth Status Label
+            self.auth_status_label = QLabel("🔐 Auth:")
+            self.auth_status_label.setStyleSheet("color: #666; font-size: 10px; margin: 2px;")
+            self.addWidget(self.auth_status_label)
+            
+            # Login/Logout Button
+            self.auth_button = QPushButton("🔑 Login")
+            self.auth_button.setToolTip("Login to Artisan")
+            self.auth_button.setMaximumSize(80, 24)
+            self.auth_button.setStyleSheet("font-size: 10px; margin: 2px; padding: 2px; border-radius: 3px;")
+            self.auth_button.clicked.connect(self._handle_auth_action)
+            self.addWidget(self.auth_button)
+            
+            # Auth Status Indicator
+            self.auth_status_indicator = QLabel("❌")
+            self.auth_status_indicator.setToolTip("Authentication Status")
+            self.auth_status_indicator.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px;")
+            self.addWidget(self.auth_status_indicator)
+            
+            # Connect auth manager signals
+            self.auth_manager.login_successful.connect(self._on_login_success)
+            self.auth_manager.login_failed.connect(self._on_login_failed)
+            self.auth_manager.token_expired.connect(self._on_token_expired)
+            
+            # Initial status update
+            self._update_auth_status()
+            
+        except Exception as e:
+            _log.error(f"Error setting up auth actions: {e}")
+    def _handle_auth_action(self):
+        """Handle login/logout button click"""
+        try:
+            if self.auth_manager.current_token and not self.auth_manager.is_token_expired():
+                # User is logged in, show logout option
+                from PyQt6.QtWidgets import QMessageBox
+                reply = QMessageBox.question(
+                    self, 
+                    "Logout", 
+                    "Are you sure you want to logout?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                )
+                if reply == QMessageBox.StandardButton.Yes:
+                    self.auth_manager.clear_tokens()
+                    self._update_auth_status()
+                    self.aw.sendmessage("Logged out successfully")
+            else:
+                # User is not logged in, show login dialog
+                self._show_login_dialog()
+        except Exception as e:
+            _log.error(f"Error handling auth action: {e}")
+    
+    def _show_login_dialog(self):
+        """Show the login dialog"""
+        try:
+            from artisanlib.plugins.auth_dialog import AuthDialog
+            dialog = AuthDialog(self)
+            # Use the same auth manager instance
+            dialog.auth_manager = self.auth_manager
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                self._update_auth_status()
+                self.aw.sendmessage("Login successful")
+        except Exception as e:
+            _log.error(f"Error showing login dialog: {e}")
+    
+    def _update_auth_status(self):
+        """Update authentication status display"""
+        try:
+            if self.auth_manager.current_token and not self.auth_manager.is_token_expired():
+                # User is logged in
+                self.auth_button.setText("🔓 Logout")
+                self.auth_button.setToolTip("Logout from Artisan")
+                self.auth_status_indicator.setText("✅")
+                self.auth_status_indicator.setToolTip("Authenticated")
+                self.auth_status_indicator.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #d4edda; color: #155724;")
+            else:
+                # User is not logged in
+                self.auth_button.setText("🔑 Login")
+                self.auth_button.setToolTip("Login to Artisan")
+                self.auth_status_indicator.setText("❌")
+                self.auth_status_indicator.setToolTip("Not authenticated")
+                self.auth_status_indicator.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #f8d7da; color: #721c24;")
+        except Exception as e:
+            _log.error(f"Error updating auth status: {e}")
+    
+    def _on_login_success(self, access_token, refresh_token):
+        """Handle successful login"""
+        try:
+            self._update_auth_status()
+            # Notify all plugins that tokens are available
+            self._notify_plugins_of_auth()
+        except Exception as e:
+            _log.error(f"Error handling login success: {e}")
+    
+    def _on_login_failed(self, error_message):
+        """Handle failed login"""
+        try:
+            self._update_auth_status()
+            self.aw.sendmessage(f"Login failed: {error_message}")
+        except Exception as e:
+            _log.error(f"Error handling login failure: {e}")
+    
+    def _on_token_expired(self):
+        """Handle token expiration"""
+        try:
+            self._update_auth_status()
+            self.aw.sendmessage("Authentication token expired. Please login again.")
+        except Exception as e:
+            _log.error(f"Error handling token expiration: {e}")
+    
+    def _notify_plugins_of_auth(self):
+        """Notify all plugins that authentication tokens are available"""
+        try:
+            # This method can be used to notify plugins that tokens are available
+            pass
+        except Exception as e:
+            _log.error(f"Error notifying plugins of auth: {e}")
     
     def _add_plugin_status_actions(self):
         """Add plugin status indicators to toolbar"""

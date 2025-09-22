@@ -6,6 +6,8 @@ from enum import Enum
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from .auth_manager import GlobalAuthManager
+
 try:
     from PyQt6.QtWidgets import QMenu, QMainWindow
     from PyQt6.QtCore import QObject, pyqtSignal, QThread, QMutex, QTimer
@@ -108,9 +110,21 @@ class PluginBase(QObject):
         # Performance tracking
         self.operation_times: Dict[str, List[float]] = {}
         
+        # Auth
+        self.auth_manager = GlobalAuthManager()
+
+        # connect to auth manager signals
+        self.auth_manager.login_successful.connect(self._on_auth_login_success)
+        self.auth_manager.login_failed.connect(self._on_auth_login_failed)
+        self.auth_manager.token_refreshed.connect(self._on_auth_token_refreshed)
+        self.auth_manager.token_expired.connect(self._on_auth_token_expired)
+
         self.logger = logging.getLogger(f"artisan.plugins.{self.name}")
         self._setup_logging()
         self._setup_worker_thread()
+
+
+    
         
     def _setup_logging(self) -> None:
         """Setup logging for the plugin"""
@@ -444,5 +458,51 @@ class PluginBase(QObject):
             self.logger.info(f"Reset error state for {self.name}")
         finally:
             self._mutex.unlock()
+
+## Auth
+    def _on_auth_login_success(self, access_token: str, refresh_token: str):
+        """Called when authentication is successful - override in subclasses"""
+        self.logger.info(f"Authentication successful for {self.name}")
+        self._on_auth_success_impl(access_token, refresh_token)
+    
+    def _on_auth_login_failed(self, error: str):
+        """Called when authentication fails - override in subclasses"""
+        self.logger.warning(f"Authentication failed for {self.name}: {error}")
+        self._on_auth_failed_impl(error)
+    
+    def _on_auth_token_refreshed(self, access_token: str, refresh_token: str):
+        """Called when token is refreshed - override in subclasses"""
+        self.logger.info(f"Token refreshed for {self.name}")
+        self._on_token_refreshed_impl(access_token, refresh_token)
+    
+    def _on_auth_token_expired(self):
+        """Called when token expires - override in subclasses"""
+        self.logger.warning(f"Token expired for {self.name}")
+        self._on_token_expired_impl()
+    
+    # Override these methods in subclasses
+    def _on_auth_success_impl(self, access_token: str, refresh_token: str):
+        """Override in subclasses to handle auth success"""
+        pass
+    
+    def _on_auth_failed_impl(self, error: str):
+        """Override in subclasses to handle auth failure"""
+        pass
+    
+    def _on_token_refreshed_impl(self, access_token: str, refresh_token: str):
+        """Override in subclasses to handle token refresh"""
+        pass
+    
+    def _on_token_expired_impl(self):
+        """Override in subclasses to handle token expiration"""
+        pass
+    
+    def get_auth_token(self) -> Optional[str]:
+        """Get current valid auth token"""
+        return self.auth_manager.get_valid_token()
+    
+    def is_authenticated(self) -> bool:
+        """Check if user is authenticated"""
+        return self.auth_manager.get_valid_token() is not None
 
 ArtisanPlugin = PluginBase

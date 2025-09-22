@@ -191,6 +191,7 @@ class LiveBroadcastPlugin(PluginBase):
                     path=self.config.socketio_path,  # Use Socket.IO path
                     secure=self.config.use_ssl,  # Enable SSL/WSS
                     auth_token=self.config.auth_token,  # JWT authentication
+                    refresh_token=self.config.refresh_token,
                     reconnect_interval=self.config.reconnect_interval,
                     max_reconnect_attempts=self.config.max_reconnect_attempts,
                     connection_timeout=self.config.connection_timeout,
@@ -2043,6 +2044,7 @@ class LiveBroadcastPlugin(PluginBase):
                 path=self.config.socketio_path,  # Use Socket.IO path
                 secure=self.config.use_ssl,  # Enable SSL/WSS
                 auth_token=self.config.auth_token,  # JWT authentication
+                refresh_token=self.config.refresh_token,
                 reconnect_interval=self.config.reconnect_interval,
                 max_reconnect_attempts=self.config.max_reconnect_attempts,
                 connection_refresh_interval=self.config.connection_refresh_interval,

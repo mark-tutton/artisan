@@ -157,12 +157,18 @@ class LiveBroadcastConfigDialog(QDialog):
             self.auth_token_edit.setPlaceholderText("Enter JWT token")
             self.auth_token_edit.setToolTip("JWT authentication token for server access")
 
+            self.refresh_token_edit = QLineEdit()
+            self.refresh_token_edit.setPlaceholderText("Enter refresh token")
+            self.refresh_token_edit.setToolTip("Refresh token for JWT authentication")
+
             try:
                 # PyQt6
                 self.auth_token_edit.setEchoMode(QLineEdit.Password)
+                self.refresh_token_edit.setEchoMode(QLineEdit.Password)
             except AttributeError:
                 # PyQt5
                 self.auth_token_edit.setEchoMode(QLineEdit.EchoMode.Password)
+                self.refresh_token_edit.setEchoMode(QLineEdit.EchoMode.Password)
 
             # Show/hide token button
             self.show_token_button = QPushButton("�� Show")
@@ -174,6 +180,17 @@ class LiveBroadcastConfigDialog(QDialog):
             token_layout.addWidget(self.auth_token_edit)
             token_layout.addWidget(self.show_token_button)
             security_layout.addRow("JWT Token:", token_layout)
+
+            # Show/hide refresh token button
+            self.show_refresh_token_button = QPushButton("👁️ Show")
+            self.show_refresh_token_button.setCheckable(True)
+            self.show_refresh_token_button.setToolTip("Toggle refresh token visibility")
+            self.show_refresh_token_button.toggled.connect(self.toggle_refresh_token_visibility)
+
+            refresh_token_layout = QHBoxLayout()
+            refresh_token_layout.addWidget(self.refresh_token_edit)
+            refresh_token_layout.addWidget(self.show_refresh_token_button)
+            security_layout.addRow("Refresh Token:", refresh_token_layout)
 
             # JWT Issuer
             self.jwt_issuer_edit = QLineEdit()
@@ -555,6 +572,28 @@ class LiveBroadcastConfigDialog(QDialog):
         except Exception as e:
             _log.error(f"Error toggling token visibility: {e}")
 
+    def toggle_refresh_token_visibility(self, checked):
+        """Toggle refresh token visibility"""
+        try:
+            if checked:
+                # PyQt6
+                self.refresh_token_edit.setEchoMode(QLineEdit.Normal)
+            else:
+                self.refresh_token_edit.setEchoMode(QLineEdit.Password)
+        except AttributeError:
+            # PyQt5
+            if checked:
+                self.refresh_token_edit.setEchoMode(QLineEdit.EchoMode.Normal)
+            else:
+                self.refresh_token_edit.setEchoMode(QLineEdit.EchoMode.Password)
+
+        if checked:
+            self.show_refresh_token_button.setText("🙈 Hide")
+            self.show_refresh_token_button.setToolTip("Hide refresh token")
+        else:
+            self.show_refresh_token_button.setText("👁️ Show")
+            self.show_refresh_token_button.setToolTip("Show refresh token")
+
     def load_config(self):
         """Load configuration into UI with error handling"""
         self._config_mutex.lock()
@@ -567,6 +606,7 @@ class LiveBroadcastConfigDialog(QDialog):
             # Security settings
             self.use_ssl_check.setChecked(self.config.use_ssl)
             self.auth_token_edit.setText(self.config.auth_token or "")
+            self.refresh_token_edit.setText(self.config.refresh_token or "")
             self.jwt_issuer_edit.setText(self.config.jwt_issuer or "")
             self.jwt_audience_edit.setText(self.config.jwt_audience or "")
             self.jwt_validation_check.setChecked(self.config.jwt_validation_enabled)
@@ -636,6 +676,7 @@ class LiveBroadcastConfigDialog(QDialog):
             # Security settings
             self.config.use_ssl = self.use_ssl_check.isChecked()
             self.config.auth_token = self.auth_token_edit.text().strip() or None
+            self.config.refresh_token = self.refresh_token_edit.text().strip() or None
             self.config.jwt_issuer = self.jwt_issuer_edit.text().strip() or None
             self.config.jwt_audience = self.jwt_audience_edit.text().strip() or None
             self.config.jwt_validation_enabled = self.jwt_validation_check.isChecked()

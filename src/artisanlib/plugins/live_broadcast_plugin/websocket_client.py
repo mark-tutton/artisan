@@ -42,6 +42,7 @@ class SocketIOBroadcaster(QObject):
         path: str = "/socket.io/",
         secure: bool = False,
         auth_token: Optional[str] = None,
+        refresh_token: Optional[str] = None,
         reconnect_interval: float = 5.0,
         max_reconnect_attempts: int = 10,
         connection_timeout: float = 10.0,
@@ -61,6 +62,7 @@ class SocketIOBroadcaster(QObject):
         self.secure = secure
         self.path = path if path.startswith("/") else f"/{path}"
         self.auth_token = auth_token
+        self.refresh_token = refresh_token
 
         # Build URL with proper protocol
         protocol = "https" if secure else "http"
@@ -165,7 +167,11 @@ class SocketIOBroadcaster(QObject):
             }
             if self.auth_token:
                 connect_kwargs["auth"] = {"token": self.auth_token}
-                connect_kwargs["headers"] = {"Authorization": f"Bearer {self.auth_token}"}
+                # connect_kwargs["headers"] = {"Authorization": f"Bearer {self.auth_token}"}
+                headers = {"Authorization": f"Bearer {self.auth_token}"}
+                if self.refresh_token:
+                    headers["x-refresh-token"] = self.refresh_token
+                connect_kwargs["headers"] = headers
 
             await self.sio.connect(self.url, **connect_kwargs)
             
@@ -215,7 +221,11 @@ class SocketIOBroadcaster(QObject):
 
             if self.auth_token:
                 connect_kwargs["auth"] = {"token": self.auth_token}
-                connect_kwargs["headers"] = {"Authorization": f"Bearer {self.auth_token}"}
+                # connect_kwargs["headers"] = {"Authorization": f"Bearer {self.auth_token}"}
+                headers = {"Authorization": f"Bearer {self.auth_token}"}
+                if self.refresh_token:
+                    headers["x-refresh-token"] = self.refresh_token
+                connect_kwargs["headers"] = headers
                 
                 _log.debug(f"Connecting with JWT authentication: {self.auth_token[:20]}...")
                 _log.debug(f"Auth parameter: {connect_kwargs['auth']}")
@@ -458,17 +468,21 @@ class SocketIOBroadcaster(QObject):
 
                 if self.auth_token:
                     connect_kwargs["auth"] = {"token": self.auth_token}
-                    connect_kwargs["headers"] = {"Authorization": f"Bearer {self.auth_token}"}
+                    # connect_kwargs["headers"] = {"Authorization": f"Bearer {self.auth_token}"}
+                    headers = {"Authorization": f"Bearer {self.auth_token}"}
+                    if self.refresh_token:
+                        headers["x-refresh-token"] = self.refresh_token
+                    connect_kwargs["headers"] = headers
                     
                     self.sio.auth = {"token": self.auth_token}
                     
-                    _log.debug(f"Connecting with JWT authentication: {self.auth_token[:20]}...")
-                    _log.debug(f"Auth parameter: {connect_kwargs['auth']}")
-                    _log.debug(f"Headers: {connect_kwargs['headers']}")
-                    _log.debug(f"Client auth: {self.sio.auth}")
+                    print(f"Connecting with JWT authentication: {self.auth_token[:20]}...")
+                    print(f"Auth parameter: {connect_kwargs['auth']}")
+                    print(f"Headers: {connect_kwargs['headers']}")
+                    print(f"Client auth: {self.sio.auth}")
 
-                _log.debug(f"Attempting to connect to {self.url} with path {self.socketio_path}")
-                _log.debug(f"Full connection kwargs: {connect_kwargs}")
+                print(f"Attempting to connect to {self.url} with path {self.socketio_path}")
+                print(f"Full connection kwargs: {connect_kwargs}")
                 
                 await self.sio.connect(self.url, **connect_kwargs)
 
@@ -773,7 +787,11 @@ class SocketIOBroadcaster(QObject):
                         }
                         if self.auth_token:
                             connect_kwargs["auth"] = {"token": self.auth_token}
-                            connect_kwargs["headers"] = {"Authorization": f"Bearer {self.auth_token}"}
+                            # connect_kwargs["headers"] = {"Authorization": f"Bearer {self.auth_token}"}
+                            headers = {"Authorization": f"Bearer {self.auth_token}"}
+                            if self.refresh_token:
+                                headers["x-refresh-token"] = self.refresh_token
+                            connect_kwargs["headers"] = headers
 
                         await self.sio.connect(self.url, **connect_kwargs)
 

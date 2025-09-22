@@ -63,6 +63,7 @@ class LiveBroadcastConfig:
     # Socket.IO settings
     use_ssl: bool = False
     auth_token: str = ""   
+    refresh_token: str = ""
     socketio_path: str = "/socket.io/"  # Socket.IO default path
      
     # Connection refresh settings

@@ -11,19 +11,20 @@ _log = logging.getLogger(__name__)
 
 
 class InventoryFetcher:
-    """Fetches beans data from external server via Gateway with JWT authentication and thread safety"""
-
+    """Fetches beans data from external server via Gateway with authentication and thread safety"""
     def __init__(self, config):
         self.config = config
-        self.timeout = config.timeout
-        self.use_ssl = config.use_ssl
-        self.validate_ssl_cert = config.validate_ssl_cert
+        
+        # Use defaults
+        self.timeout = 30
+        self.use_ssl = True
+        self.validate_ssl_cert = True
 
         self.session = requests.Session()
 
         adapter = HTTPAdapter(
             pool_connections=1,
-            pool_maxsize=1,  
+            pool_maxsize=1,
             max_retries=Retry(total=3, backoff_factor=0.3, status_forcelist=[500, 502, 504]),
         )
 
@@ -33,7 +34,6 @@ class InventoryFetcher:
         if not self.validate_ssl_cert:
             self.session.verify = False
             import urllib3
-
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
         # Thread safety
@@ -42,26 +42,7 @@ class InventoryFetcher:
         self._min_request_interval = 0.1  # Minimum 100ms between requests
         self._closed = False
 
-        # Set up headers
-        self._setup_headers()
-
         _log.debug("InventoryFetcher initialized with connection pooling")
-
-    def _setup_headers(self):
-        """Setup authentication headers based on config"""
-        if self._closed:
-            return
-
-        headers = {"Content-Type": "application/json"}
-
-        # Get auth headers from config
-        auth_headers = self.config.get_auth_headers()
-        headers.update(auth_headers)
-
-        self.session.headers.update(headers)
-        _log.debug(
-            f"Setup headers for gateway: {self.config.use_gateway}, auth_type: {self.config.gateway_auth_type}"
-        )
 
     def _rate_limit(self):
         """Rate limiting to prevent overwhelming the server"""
@@ -91,7 +72,7 @@ class InventoryFetcher:
             return f"{protocol}://{base_url.rstrip('/')}{endpoint}"
 
     def fetch_beans(self, limit: int = 1000, offset: int = 0) -> Dict[str, Any]:
-        """Fetch beans from server with pagination support and thread safety"""
+        """Fetch beans from server with pagination and thread safety"""
         if self._closed:
             raise Exception("Fetcher is closed")
 
@@ -99,31 +80,30 @@ class InventoryFetcher:
             try:
                 self._rate_limit()
 
-                # Build URL with pagination parameters
-                if self.config.use_gateway:
-                    # Use gateway route
-                    url = self._build_url("/api/inventory")
-                else:
-                    # Direct connection to inventory service
-                    url = self._build_url("/api/inventory")
-
+                # Build URL
+                url = self._build_url("/api/inventory")
                 params = {"limit": limit, "offset": offset}
 
                 _log.info(f"Fetching beans from: {url} (limit: {limit}, offset: {offset})")
-                _log.debug(
-                    f"Gateway mode: {self.config.use_gateway}, Auth type: {self.config.gateway_auth_type}"
-                )
+                _log.debug(f"Fetching from gateway: {self.config.gateway_url}")
 
-                response = self.session.get(url, params=params, timeout=self.timeout)
+                # Get auth headers from the plugin
+                headers = self._get_auth_headers()
+                
+                response = self.session.get(url, params=params, headers=headers, timeout=self.timeout)
+
+                # Handle auth errors
+                if response.status_code == 401:
+                    _log.warning("Authentication failed - token may be expired")
+                    return {"error": "Authentication failed", "status_code": 401}
+
                 response.raise_for_status()
 
                 data = response.json()
                 beans = data.get("data", [])
                 total_count = data.get("total", len(beans))
 
-                _log.info(
-                    f"Successfully fetched {len(beans)} beans (total available: {total_count})"
-                )
+                _log.info(f"Successfully fetched {len(beans)} beans (total available: {total_count})")
                 return {
                     "data": beans,
                     "total": total_count,
@@ -172,6 +152,7 @@ class InventoryFetcher:
         except Exception as e:
             _log.error(f"Error during batch fetch: {e}")
             raise
+      
 
     def fetch_bean_details(self, bean_id: str) -> Dict[str, Any]:
         """Fetch specific bean details with thread safety"""
@@ -189,6 +170,7 @@ class InventoryFetcher:
                     url = self._build_url(f"/api/inventory/{bean_id}")
 
                 response = self.session.get(url, timeout=self.timeout)
+
                 response.raise_for_status()
 
                 data = response.json()
@@ -207,14 +189,17 @@ class InventoryFetcher:
             try:
                 self._rate_limit()
 
-                if self.config.use_gateway:
-                    # Test gateway health endpoint
-                    url = self._build_url("/gateway/health")
-                else:
-                    # Test direct service health endpoint
-                    url = self._build_url("/api/health")
+                # Use config health check URL else default
+                health_url = self.config.health_check_url or "/api/inventory/health"
+                url = self._build_url(health_url)
 
                 response = self.session.get(url, timeout=self.timeout)
+
+                # auith error handling
+                if response.status_code == 401:
+                    _log.warning("Authentication failed during connection test")
+                    return False
+
                 return response.status_code == 200
             except Exception as e:
                 _log.debug(f"Connection test failed: {e}")
@@ -235,106 +220,18 @@ class InventoryFetcher:
                     url = self._build_url("/api/info")
 
                 response = self.session.get(url, timeout=self.timeout)
+
+                # auth error handling
+                if response.status_code == 401:
+                    _log.warning("Authentication failed during connection test")
+                    return False
+
                 if response.status_code == 200:
                     return response.json()
                 else:
                     return {"error": f"Server returned status {response.status_code}"}
             except Exception as e:
                 return {"error": f"Failed to get server info: {e}"}
-
-    def validate_jwt_token(self) -> Dict[str, Any]:
-        """Validate JWT token if configured"""
-        if self._closed:
-            return {"valid": False, "error": "Fetcher is closed"}
-
-        if not self.config.jwt_token or self.config.gateway_auth_type not in ["jwt", "google"]:
-            return {"valid": False, "error": "No JWT token configured"}
-
-        try:
-            self._rate_limit()
-
-            if self.config.use_gateway:
-                # Use gateway auth validation endpoint
-                url = self._build_url("/auth/validate")
-            else:
-                url = self._build_url("/auth/validate")
-
-            response = self.session.post(url, timeout=self.timeout)
-            if response.status_code == 200:
-                return {"valid": True, "data": response.json()}
-            else:
-                return {"valid": False, "error": f"Validation failed: {response.status_code}"}
-        except Exception as e:
-            return {"valid": False, "error": f"Validation error: {e}"}
-
-    def refresh_jwt_token(self) -> bool:
-        """Attempt to refresh JWT token"""
-        if self._closed:
-            return False
-
-        if not self.config.jwt_token or self.config.gateway_auth_type not in ["jwt", "google"]:
-            return False
-
-        try:
-            self._rate_limit()
-
-            if self.config.use_gateway:
-                url = self._build_url("/api/auth/refresh")
-            else:
-                url = self._build_url("/api/auth/refresh")
-
-            response = self.session.post(url, timeout=self.timeout)
-            if response.status_code == 200:
-                data = response.json()
-                if "token" in data:
-                    self.config.jwt_token = data["token"]
-                    self._setup_headers()
-                    _log.info("JWT token refreshed successfully")
-                    return True
-            return False
-        except Exception as e:
-            _log.error(f"Failed to refresh JWT token: {e}")
-            return False
-
-    def authenticate_with_gateway(self) -> Dict[str, Any]:
-        """Authenticate with gateway using configured method"""
-        if self._closed:
-            return {"success": False, "error": "Fetcher is closed"}
-
-        try:
-            self._rate_limit()
-
-            if self.config.gateway_auth_type == "google":
-                # For Google OAuth, the JWT token should already be obtained
-                # This method would typically be called after OAuth flow
-                return {"success": True, "message": "Google OAuth token configured"}
-
-            elif self.config.gateway_auth_type == "api_key":
-                # Test API key authentication
-                url = self._build_url("/api/auth/test")
-                headers = {"X-API-Key": self.config.gateway_api_key}
-
-                response = self.session.get(url, headers=headers, timeout=self.timeout)
-                if response.status_code == 200:
-                    return {"success": True, "message": "API key authentication successful"}
-                else:
-                    return {
-                        "success": False,
-                        "error": f"API key authentication failed: {response.status_code}",
-                    }
-
-            elif self.config.gateway_auth_type == "jwt":
-                # Test JWT authentication
-                return self.validate_jwt_token()
-
-            else:
-                return {
-                    "success": False,
-                    "error": f"Unsupported auth type: {self.config.gateway_auth_type}",
-                }
-
-        except Exception as e:
-            return {"success": False, "error": f"Authentication error: {e}"}
 
     def close(self):
         """Close the session and cleanup resources"""
@@ -397,3 +294,7 @@ class InventoryFetcher:
             }
         except Exception as e:
             return {"status": "error", "message": str(e)}
+
+    def _get_auth_headers(self) -> Dict[str, str]:
+        """Get authentication headers - expects plugin to provide them"""`
+        return {}
