@@ -12,8 +12,9 @@ _log = logging.getLogger(__name__)
 
 class InventoryFetcher:
     """Fetches beans data from external server via Gateway with authentication and thread safety"""
-    def __init__(self, config):
+    def __init__(self, config, auth_manager=None):
         self.config = config
+        self.auth_manager = auth_manager
         
         # Use defaults
         self.timeout = 30
@@ -71,6 +72,60 @@ class InventoryFetcher:
             protocol = "https" if self.use_ssl else "http"
             return f"{protocol}://{base_url.rstrip('/')}{endpoint}"
 
+    # def fetch_beans(self, limit: int = 1000, offset: int = 0) -> Dict[str, Any]:
+    #     """Fetch beans from server with pagination and thread safety"""
+    #     if self._closed:
+    #         raise Exception("Fetcher is closed")
+
+    #     with self._lock:
+    #         try:
+    #             self._rate_limit()
+
+    #             # Build URL
+    #             url = self._build_url("/api/inventory")
+    #             params = {"limit": limit, "offset": offset}
+
+    #             _log.info(f"Fetching beans from: {url} (limit: {limit}, offset: {offset})")
+    #             _log.debug(f"Fetching from gateway: {self.config.gateway_url}")
+
+    #             # Get auth headers from the plugin
+    #             headers = self._get_auth_headers()
+                
+    #             response = self.session.get(url, params=params, headers=headers, timeout=self.timeout)
+
+    #             # Debug the actual response
+    #             _log.debug(f"Response status: {response.status_code}")
+    #             _log.debug(f"Response headers: {dict(response.headers)}")
+                
+    #             # Handle auth errors with more detail
+    #             if response.status_code == 401:
+    #                 try:
+    #                     error_data = response.json()
+    #                     _log.warning(f"Authentication failed - Response: {error_data}")
+    #                 except:
+    #                     _log.warning(f"Authentication failed - Raw response: {response.text}")
+    #                 return {"error": "Authentication failed", "status_code": 401, "response": response.text}
+
+
+    #             response.raise_for_status()
+
+    #             data = response.json()
+    #             beans = data.get("data", [])
+    #             total_count = data.get("total", len(beans))
+
+    #             _log.info(f"Successfully fetched {len(beans)} beans (total available: {total_count})")
+    #             return {
+    #                 "data": beans,
+    #                 "total": total_count,
+    #                 "limit": limit,
+    #                 "offset": offset,
+    #                 "has_more": offset + limit < total_count,
+    #             }
+
+    #         except requests.exceptions.RequestException as e:
+    #             _log.error(f"Failed to fetch beans: {e}")
+    #             raise Exception(f"Failed to fetch beans: {e}")
+
     def fetch_beans(self, limit: int = 1000, offset: int = 0) -> Dict[str, Any]:
         """Fetch beans from server with pagination and thread safety"""
         if self._closed:
@@ -89,13 +144,27 @@ class InventoryFetcher:
 
                 # Get auth headers from the plugin
                 headers = self._get_auth_headers()
+                _log.info(f"Auth headers: {headers}")  # Add this debug line
+                
+                # Debug the actual request
+                _log.info(f"Making request to: {url}")
+                _log.info(f"Request params: {params}")
+                _log.info(f"Request headers: {headers}")
                 
                 response = self.session.get(url, params=params, headers=headers, timeout=self.timeout)
 
-                # Handle auth errors
+                # Debug the actual response
+                _log.info(f"Response status: {response.status_code}")
+                _log.info(f"Response headers: {dict(response.headers)}")
+                
+                # Handle auth errors with more detail
                 if response.status_code == 401:
-                    _log.warning("Authentication failed - token may be expired")
-                    return {"error": "Authentication failed", "status_code": 401}
+                    try:
+                        error_data = response.json()
+                        _log.warning(f"Authentication failed - Response: {error_data}")
+                    except:
+                        _log.warning(f"Authentication failed - Raw response: {response.text}")
+                    return {"error": "Authentication failed", "status_code": 401, "response": response.text}
 
                 response.raise_for_status()
 
@@ -235,12 +304,16 @@ class InventoryFetcher:
 
     def close(self):
         """Close the session and cleanup resources"""
+        # Check if object is properly initialized
+        if not hasattr(self, '_closed'):
+            return
+            
         if self._closed:
             return
 
         try:
             self._closed = True
-            if self.session:
+            if hasattr(self, 'session') and self.session:
                 self.session.close()
                 _log.debug("Inventory fetcher session closed")
         except Exception as e:
@@ -248,7 +321,11 @@ class InventoryFetcher:
 
     def __del__(self):
         """Destructor to ensure cleanup"""
-        self.close()
+        try:
+            self.close()
+        except Exception:
+            # Ignore exceptions during cleanup to avoid masking real errors
+            pass
 
     def __enter__(self):
         """Context manager entry"""
@@ -296,5 +373,12 @@ class InventoryFetcher:
             return {"status": "error", "message": str(e)}
 
     def _get_auth_headers(self) -> Dict[str, str]:
-        """Get authentication headers - expects plugin to provide them"""
+        """Get authentication headers from global auth manager"""
+        if self.auth_manager and self.auth_manager.is_authenticated():
+            token = self.auth_manager.get_valid_token()
+            if token:
+                return {"Authorization": f"Bearer {token}"}
+        
+        _log.debug("No valid authentication token available")
         return {}
+

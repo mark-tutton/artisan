@@ -13,6 +13,7 @@ except ImportError:
     from PyQt5.QtCore import QTimer, pyqtSignal, QObject
 
 from ..base import ArtisanPlugin
+from ..auth_manager import GlobalAuthManager
 from .config import InventoryFetcherConfig
 from .inventory_fetcher import InventoryFetcher
 from .config_dialog import InventoryFetcherConfigDialog
@@ -46,12 +47,21 @@ class InventoryFetcherPlugin(ArtisanPlugin):
         self.fetcher = None
         self.beans_data = []
         self.roast_properties_dialog = None
+
+        # Initialize global auth manager
+        self.auth_manager = GlobalAuthManager()
+        
         
         # Threading state
         self._fetch_in_progress = False
         self._last_fetch_time = 0
         self._fetch_interval = 300  # 5 minutes between fetches
         
+        # Connect auth manager signals
+        self.auth_manager.login_successful.connect(self._on_auth_success_impl)
+        self.auth_manager.token_refreshed.connect(self._on_token_refreshed_impl)
+        self.auth_manager.token_expired.connect(self._on_token_expired_impl)
+       
         
     def initialize(self, main_window) -> None:
         """Initialize the plugin"""
@@ -65,6 +75,17 @@ class InventoryFetcherPlugin(ArtisanPlugin):
             if self.config.auto_fetch_on_startup:
                 QTimer.singleShot(1000, self.fetch_beans)
 
+    # def _create_fetcher(self):
+    #     """Create a new fetcher instance, closing any existing one"""
+    #     # Close existing fetcher to prevent connection leaks
+    #     if self.fetcher:
+    #         self.logger.info("Closing existing fetcher to prevent connection leaks")
+    #         self.fetcher.close()
+    #         self.fetcher = None
+        
+    #     # Create new fetcher
+    #     self.fetcher = InventoryFetcher(self.config, self.auth_manager)
+    #     self.logger.info("Created new inventory fetcher with connection pooling")
     def _create_fetcher(self):
         """Create a new fetcher instance, closing any existing one"""
         # Close existing fetcher to prevent connection leaks
@@ -73,8 +94,15 @@ class InventoryFetcherPlugin(ArtisanPlugin):
             self.fetcher.close()
             self.fetcher = None
         
+        # Debug auth manager
+        self.logger.info(f"Auth manager exists: {self.auth_manager is not None}")
+        if self.auth_manager:
+            self.logger.info(f"Is authenticated: {self.auth_manager.is_authenticated()}")
+            token_info = self.auth_manager.get_token_info()
+            self.logger.info(f"Token info: {token_info}")
+        
         # Create new fetcher
-        self.fetcher = InventoryFetcher(self.config)
+        self.fetcher = InventoryFetcher(self.config, self.auth_manager)
         self.logger.info("Created new inventory fetcher with connection pooling")
 
  
@@ -85,6 +113,7 @@ class InventoryFetcherPlugin(ArtisanPlugin):
         # Recreate fetcher with new tokens
         if self.config.get_effective_url():
             self._create_fetcher()
+
 
 
     
@@ -195,12 +224,19 @@ class InventoryFetcherPlugin(ArtisanPlugin):
     def _fetch_beans_worker(self):
         """Worker method for fetching beans"""
         try:
+            # Debug auth status
+            self.logger.info(f"Auth manager exists: {self.auth_manager is not None}")
+            if self.auth_manager:
+                self.logger.info(f"Is authenticated: {self.auth_manager.is_authenticated()}")
+                token_info = self.auth_manager.get_token_info()
+                self.logger.info(f"Token info: {token_info}")
+        
             # Get auth headers from global auth manager
             headers = self.get_auth_headers()
             
             # Pass headers to fetcher by updating its session
-            if self.fetcher and headers:
-                self.fetcher.session.headers.update(headers)
+            # if self.fetcher and headers:
+            #     self.fetcher.session.headers.update(headers)
             
             result = self.fetcher.fetch_beans()
             if result and "data" in result:
@@ -484,3 +520,14 @@ class InventoryFetcherPlugin(ArtisanPlugin):
             self.logger.error(f"Inventory fetch operation failed in worker thread: {error_message}")
             # Schedule the failure handler in the main thread
             QTimer.singleShot(0, lambda: self._on_fetch_failed(error_message))
+
+    # Add this to the inventory fetcher plugin for debugging
+    def debug_auth_status(self):
+        """Debug authentication status"""
+        if self.auth_manager:
+            print(f"Auth manager exists: {self.auth_manager is not None}")
+            print(f"Is authenticated: {self.auth_manager.is_authenticated()}")
+            print(f"Token info: {self.auth_manager.get_token_info()}")
+            print(f"Auth base URL: {self.auth_manager.get_auth_base_url()}")
+        else:
+            print("No auth manager found")

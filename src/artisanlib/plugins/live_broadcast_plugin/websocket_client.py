@@ -72,13 +72,22 @@ class SocketIOBroadcaster(QObject):
         self.roaster_id = roaster_id.strip() if roaster_id and roaster_id.strip() else self._generate_stable_client_id()
         
 
-        # Build URL with proper protocol
+        # # Build URL with proper protocol
+        # protocol = "https" if secure else "http"
+        # self.url = f"{protocol}://{self.host}:{self.port}"
+        
+        # # Extract the Socket.IO path from the full path
+        # self.socketio_path = self.path.strip("/")
+
+        # Build URL with proper protocol - clean host of any existing protocol
+        clean_host = self.host.replace("https://", "").replace("http://", "")
         protocol = "https" if secure else "http"
-        self.url = f"{protocol}://{self.host}:{self.port}"
+        self.url = f"{protocol}://{clean_host}:{self.port}"
         
         # Extract the Socket.IO path from the full path
         self.socketio_path = self.path.strip("/")
 
+        
         # Connection settings
         self.reconnect_interval = reconnect_interval
         self.max_reconnect_attempts = max_reconnect_attempts
