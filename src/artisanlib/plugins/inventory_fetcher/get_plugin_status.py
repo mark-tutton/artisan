@@ -5,8 +5,6 @@ from typing import Dict, Any, Optional
 _log = logging.getLogger(__name__)
 
 
-def get_inventory_fetcher_status() -> Dict[str, Any]:
-
 def get_connection_pool_status() -> Dict[str, Any]:
     """Get detailed connection pool status"""
     try:
