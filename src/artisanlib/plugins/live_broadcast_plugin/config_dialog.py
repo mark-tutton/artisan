@@ -23,7 +23,7 @@ try:
         QTextEdit,
         QProgressBar,
     )
-    from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread, QMutex
+    from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread, QMutex, QObject
     from PyQt6.QtGui import QFont, QIcon
 except ImportError:
     from PyQt5.QtWidgets import (
@@ -44,7 +44,7 @@ except ImportError:
         QTextEdit,
         QProgressBar,
     )
-    from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QThread, QMutex
+    from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QThread, QMutex, QObject
     from PyQt5.QtGui import QFont, QIcon
 
 from .config import LiveBroadcastConfig

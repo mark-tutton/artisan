@@ -7374,8 +7374,16 @@ class tgraphcanvas(FigureCanvas):
 
             endtime = endofx + starttime
 
+            # if set_xlim:
+            #     self.ax.set_xlim(startofx,endtime)
             if set_xlim:
-                self.ax.set_xlim(startofx,endtime)
+                # Prevent matplotlib warning about identical xlims
+                if startofx == endtime:
+                    # Add a small epsilon to avoid identical limits
+                    epsilon = max(abs(endtime) * 1e-6, 1e-6) if endtime != 0 else 1e-6
+                    self.ax.set_xlim(startofx - epsilon, endtime + epsilon)
+                else:
+                    self.ax.set_xlim(startofx, endtime)
 
             if self.xgrid != 0:
 

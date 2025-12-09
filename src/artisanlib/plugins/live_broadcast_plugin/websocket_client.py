@@ -358,15 +358,22 @@ class SocketIOBroadcaster(QObject):
                 }
 
                 if self.auth_token:
-                    connect_kwargs["auth"] = {"token": self.auth_token}
-                    headers = {"Authorization": f"Bearer {self.auth_token}"}
-                    if self.refresh_token:
-                        headers["x-refresh-token"] = self.refresh_token
+                    # Check if it's an API key (starts with 'ccr_') or OAuth token
+                    if self.auth_token.startswith('ccr_'):
+                        # API key authentication
+                        headers = {"X-API-Key": self.auth_token}
+                        connect_kwargs["auth"] = {"apiKey": self.auth_token}
+                    else:
+                        # OAuth JWT token authentication
+                        connect_kwargs["auth"] = {"token": self.auth_token}
+                        headers = {"Authorization": f"Bearer {self.auth_token}"}
+                        if self.refresh_token:
+                            headers["x-refresh-token"] = self.refresh_token
+                    
                     connect_kwargs["headers"] = headers
+                    self.sio.auth = connect_kwargs.get("auth", {})
                     
-                    self.sio.auth = {"token": self.auth_token}
-                    
-                    _log.debug(f"Connecting with JWT authentication: {self.auth_token[:20]}...")
+                    _log.debug(f"Connecting with authentication: {self.auth_token[:20]}...")
                     _log.debug(f"Auth parameter: {connect_kwargs['auth']}")
                     _log.debug(f"Headers: {connect_kwargs['headers']}")
                     _log.debug(f"Client auth: {self.sio.auth}")

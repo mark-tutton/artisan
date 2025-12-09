@@ -92,7 +92,6 @@ class InventoryFetcher:
                 # Get auth headers from the plugin
                 headers = self._get_auth_headers()
                 
-                # Debug the entire request
                 _log.info("=== INVENTORY FETCHER REQUEST DEBUG ===")
                 _log.info(f"Request URL: {url}")
                 _log.info(f"Request method: GET")
@@ -107,14 +106,12 @@ class InventoryFetcher:
                 
                 response = requests.get(url, params=params, headers=headers, timeout=self.timeout)
 
-                                 # Debug the entire request
                 _log.info("=== INVENTORY FETCHER REQUEST DEBUG ===")
                 _log.info(f"Request URL: {url}")
                 _log.info(f"Request method: GET")
                 _log.info(f"Request params: {params}")
                 _log.info(f"Request headers: {headers}")
                 
-                # Test if Authorization header is actually being sent
                 if 'Authorization' in headers:
                     auth_header = headers['Authorization']
                     _log.info(f"Authorization header being sent: {auth_header[:50]}...")
@@ -130,7 +127,6 @@ class InventoryFetcher:
                 
                 _log.info("========================================")
                 
-                # Handle auth errors
                 if response.status_code == 401:
                     _log.warning("Authentication failed - token may be expired")
                     try:
@@ -298,7 +294,6 @@ class InventoryFetcher:
         try:
             self.close()
         except Exception:
-            # Ignore exceptions during cleanup to avoid masking real errors
             pass
 
     def __enter__(self):
@@ -346,15 +341,6 @@ class InventoryFetcher:
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
-    # def _get_auth_headers(self) -> Dict[str, str]:
-    #     """Get authentication headers from global auth manager"""
-    #     if self.auth_manager and self.auth_manager.is_authenticated():
-    #         token = self.auth_manager.get_valid_token()
-    #         if token:
-    #             return {"Authorization": f"Bearer {token}"}
-        
-    #     _log.debug("No valid authentication token available")
-    #     return {}
     def _get_auth_headers(self) -> Dict[str, str]:
         """Get authentication headers from global auth manager"""
         headers = {}

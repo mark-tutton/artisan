@@ -75,26 +75,13 @@ class InventoryFetcherPlugin(ArtisanPlugin):
             if self.config.auto_fetch_on_startup:
                 QTimer.singleShot(1000, self.fetch_beans)
 
-    # def _create_fetcher(self):
-    #     """Create a new fetcher instance, closing any existing one"""
-    #     # Close existing fetcher to prevent connection leaks
-    #     if self.fetcher:
-    #         self.logger.info("Closing existing fetcher to prevent connection leaks")
-    #         self.fetcher.close()
-    #         self.fetcher = None
-        
-    #     # Create new fetcher
-    #     self.fetcher = InventoryFetcher(self.config, self.auth_manager)
-    #     self.logger.info("Created new inventory fetcher with connection pooling")
     def _create_fetcher(self):
         """Create a new fetcher instance, closing any existing one"""
-        # Close existing fetcher to prevent connection leaks
         if self.fetcher:
             self.logger.info("Closing existing fetcher to prevent connection leaks")
             self.fetcher.close()
             self.fetcher = None
         
-        # Debug auth manager
         self.logger.info(f"Auth manager exists: {self.auth_manager is not None}")
         if self.auth_manager:
             self.logger.info(f"Is authenticated: {self.auth_manager.is_authenticated()}")
@@ -231,12 +218,7 @@ class InventoryFetcherPlugin(ArtisanPlugin):
                 token_info = self.auth_manager.get_token_info()
                 self.logger.info(f"Token info: {token_info}")
         
-            # Get auth headers from global auth manager
             headers = self.get_auth_headers()
-            
-            # Pass headers to fetcher by updating its session
-            # if self.fetcher and headers:
-            #     self.fetcher.session.headers.update(headers)
             
             result = self.fetcher.fetch_beans()
             if result and "data" in result:
