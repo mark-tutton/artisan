@@ -594,7 +594,15 @@ class Artisan(QtSingleApplication):
                         print(f"DEBUG: Query URL: {query_url}")
                         _log.info(f"DEBUG: Query URL: {query_url}")
                         # Check if this should be loaded as template
-                        is_template = (query.hasQueryItem('template') and query.queryItemValue('template') == 'true') or '/template' in query_url.toString()
+                        # check artisan://profile query params
+                        is_template = query.hasQueryItem('template') and query.queryItemValue('template') == 'true'
+                        # If not found, check the HTTP URL's query params
+                        if not is_template and query_url.hasQuery():
+                            url_query = QUrlQuery(query_url.query())
+                            is_template = url_query.hasQueryItem('template') and url_query.queryItemValue('template') == 'true'
+                        # Check if '/template' is in the URL path
+                        if not is_template:
+                            is_template = '/template' in query_url.toString()
                         print(f"DEBUG: Is template: {is_template}")
                         _log.info(f"DEBUG: Is template: {is_template}")
                         if aw.comparator is not None:
