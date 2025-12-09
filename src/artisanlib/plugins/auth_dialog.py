@@ -1,59 +1,3 @@
-# from PyQt6.QtWidgets import (
-#     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QDialogButtonBox, QTabWidget, QWidget , QMessageBox
-# )
-# from PyQt6.QtCore import Qt
-# from .auth_manager import GlobalAuthManager
-
-# class AuthDialog(QDialog):
-#     def __init__(self, parent=None):
-#         super().__init__(parent)
-#         self.auth_manager = GlobalAuthManager()
-#         self.setup_ui()
-#         self.connect_signals()
-    
-#     def setup_ui(self):
-#         self.setWindowTitle("Artisan Authentication")
-#         self.setModal(True)
-#         self.resize(400, 300)
-        
-#         layout = QVBoxLayout()
-        
-#         # Google OAuth button
-#         self.google_button = QPushButton("Login with Google")
-#         self.google_button.clicked.connect(self.login_with_google)
-#         layout.addWidget(self.google_button)
-        
-#         # Status label
-#         self.status_label = QLabel("Click 'Login with Google' to authenticate")
-#         layout.addWidget(self.status_label)
-        
-#         # Cancel button
-#         button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
-#         button_box.rejected.connect(self.reject)
-#         layout.addWidget(button_box)
-        
-#         self.setLayout(layout)
-    
-#     def connect_signals(self):
-#         self.auth_manager.login_successful.connect(self.on_login_success)
-#         self.auth_manager.login_failed.connect(self.on_login_failed)
-    
-#     def login_with_google(self):
-#         self.status_label.setText("Opening browser for Google authentication...")
-#         self.google_button.setEnabled(False)
-        
-#         if self.auth_manager.login_with_google():
-#             self.accept()
-    
-#     def on_login_success(self, access_token, refresh_token):
-#         self.status_label.setText("Authentication successful!")
-#         self.accept()
-    
-#     def on_login_failed(self, error):
-#         self.status_label.setText(f"Authentication failed: {error}")
-#         self.google_button.setEnabled(True)
-
-
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, 
     QPushButton, QDialogButtonBox, QTabWidget, QWidget, QMessageBox
@@ -114,11 +58,27 @@ class AuthDialog(QDialog):
         self.api_key_input = QLineEdit()
         self.api_key_input.setPlaceholderText("ccr_...")
         self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+
+        # Load current API key if one exists
+        if self.auth_manager.api_key:
+            self.api_key_input.setText(self.auth_manager.api_key)
+
         api_key_layout.addWidget(self.api_key_input)
+
+        # Button layout
+        api_key_button_layout = QHBoxLayout()
         
         self.api_key_button = QPushButton("Authenticate with API Key")
         self.api_key_button.clicked.connect(self.login_with_api_key)
         api_key_layout.addWidget(self.api_key_button)
+        
+        # Clear API Key button (only show if API key exists)
+        if self.auth_manager.api_key:
+            self.clear_api_key_button = QPushButton("Clear API Key")
+            self.clear_api_key_button.clicked.connect(self.clear_api_key)
+            api_key_button_layout.addWidget(self.clear_api_key_button)
+        
+        api_key_layout.addLayout(api_key_button_layout)
         
         api_key_layout.addStretch()
         api_key_tab.setLayout(api_key_layout)
@@ -147,7 +107,6 @@ class AuthDialog(QDialog):
         self.status_label.setText("Opening browser for Google authentication...")
         self.google_button.setEnabled(False)
         
-        # Run login in a separate thread to avoid blocking UI
         import threading
         def do_login():
             success = self.auth_manager.login_with_google()
@@ -176,7 +135,6 @@ class AuthDialog(QDialog):
         self.status_label.setText("Validating API key...")
         self.api_key_button.setEnabled(False)
         
-        # Run login in a separate thread to avoid blocking UI
         import threading
         def do_login():
             success = self.auth_manager.login_with_api_key(api_key)
@@ -199,3 +157,22 @@ class AuthDialog(QDialog):
         self.status_label.setText(f"Authentication failed: {error}")
         self.google_button.setEnabled(True)
         self.api_key_button.setEnabled(True)
+
+    def clear_api_key(self):
+        """Clear the current API key"""
+        reply = QMessageBox.question(
+            self,
+            "Clear API Key",
+            "Are you sure you want to clear your API key?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            self.auth_manager.clear_api_key()
+            self.api_key_input.clear()
+            self.status_label.setText("API key cleared")
+            
+            # Remove the clear button if it exists
+            if hasattr(self, 'clear_api_key_button'):
+                self.clear_api_key_button.setParent(None)
+                self.clear_api_key_button = None
