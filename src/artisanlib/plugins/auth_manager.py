@@ -131,6 +131,7 @@ class GlobalAuthManager(QObject):
     token_expired = pyqtSignal()
     login_successful = pyqtSignal(str, str)  # access_token, refresh_token
     login_failed = pyqtSignal(str)  # error message
+    api_key_validated = pyqtSignal(str)  # api_key
 
     _instance = None
     
@@ -139,23 +140,18 @@ class GlobalAuthManager(QObject):
             cls._instance = super(GlobalAuthManager, cls).__new__(cls)
         return cls._instance
     
-    
-
-      
     def __init__(self):
         super().__init__()
         if hasattr(self, '_initialized'):
             return
         self._initialized = True
         self.current_token: Optional[TokenInfo] = None
-        
-        
-        
-        # self.auth_base_url = "http://localhost:5101/auth"
-        # self._load_stored_tokens()
+        self.api_key: Optional[str] = None
+        self.auth_method: str = "none"  # "oauth", "api_key", or "none"
 
         self.auth_base_url = self._load_auth_config()
         self._load_stored_tokens()
+        self._load_stored_api_key()
 
 
     def _load_auth_config(self) -> str:
@@ -209,8 +205,54 @@ class GlobalAuthManager(QObject):
         """Get the current authentication base URL"""
         return self.auth_base_url
 
+    def login_with_api_key(self, api_key: str) -> bool:
+        """Authenticate using an API key"""
+        try:
+            if not api_key or not api_key.startswith('ccr_'):
+                self.login_failed.emit("Invalid API key format. API keys must start with 'ccr_'")
+                return False
+            
+            # Get gateway base URL (remove /auth suffix if present)
+            gateway_url = self.auth_base_url.replace('/auth', '')
+            
+            # Verify API key with backend
+            response = requests.post(
+                f"{gateway_url}/api/api-keys/verify",
+                headers={"X-API-Key": api_key},
+                json={"apiKey": api_key},
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('success') and data.get('valid'):
+                    # Store API key
+                    self.api_key = api_key
+                    self.auth_method = "api_key"
+                    self._save_api_key()
+                    self.api_key_validated.emit(api_key)
+                    self.login_successful.emit(api_key, "")  # Empty refresh token for API keys
+                    _log.info("API key authentication successful")
+                    return True
+                else:
+                    error_msg = data.get('error', 'API key validation failed')
+                    self.login_failed.emit(error_msg)
+                    return False
+            else:
+                error_data = response.json() if response.content else {}
+                error_msg = error_data.get('error', f'HTTP {response.status_code}')
+                self.login_failed.emit(error_msg)
+                return False
+                
+        except requests.exceptions.RequestException as e:
+            _log.error(f"API key authentication error: {e}")
+            self.login_failed.emit(f"Network error: {str(e)}")
+            return False
+        except Exception as e:
+            _log.error(f"API key authentication error: {e}")
+            self.login_failed.emit(f"Authentication error: {str(e)}")
+            return False
 
-    
     def login_with_google(self) -> bool:
         """Perform Google OAuth login"""
         try:
@@ -260,6 +302,10 @@ class GlobalAuthManager(QObject):
 
     def refresh_token(self) -> bool:
         """Refresh the JWT token"""
+
+        if self.auth_method != "oauth":
+            return False
+
         if not self.current_token or not self.current_token.refresh_token:
             return False
             
@@ -286,26 +332,48 @@ class GlobalAuthManager(QObject):
         return False
     
     def get_valid_token(self) -> Optional[str]:
-        """Get a valid access token, refreshing if necessary"""
-        if not self.current_token:
-            return None
-            
-        if self.is_token_expired():
-            if not self.refresh_token():
-                self.token_expired.emit()
+        """Get a valid access token or API key, refreshing if necessary"""
+        if self.auth_method == "api_key":
+            return self.api_key
+        elif self.auth_method == "oauth":
+            if not self.current_token:
                 return None
                 
-        return self.current_token.access_token
+            if self.is_token_expired():
+                if not self.refresh_token():
+                    self.token_expired.emit()
+                    return None
+                    
+            return self.current_token.access_token
+        
+        return None
     
     def is_token_expired(self) -> bool:
-        """Check if token is expired"""
-        if not self.current_token:
-            return True
+        """Check if token is expired (only for OAuth tokens)"""
+        if self.auth_method != "oauth" or not self.current_token:
+            return False
         return time.time() >= self.current_token.expires_at
+
+    def get_auth_headers(self) -> Dict[str, str]:
+        """Get authentication headers for API requests"""
+        headers = {}
+        
+        if self.auth_method == "api_key" and self.api_key:
+            headers["X-API-Key"] = self.api_key
+        elif self.auth_method == "oauth":
+            token = self.get_valid_token()
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
+        
+        return headers
 
     def is_authenticated(self) -> bool:
         """Check if user is authenticated"""
-        return self.get_valid_token() is not None
+        if self.auth_method == "api_key": 
+            return self.api_key is not None
+        elif self.auth_method == "oauth":
+            return self.get_valid_token() is not None
+        return False
     
     
     def _set_tokens(self, access_token: str, refresh_token: str, expires_in: int):
@@ -323,6 +391,12 @@ class GlobalAuthManager(QObject):
         token_dir = Path.home() / ".artisan" / "auth"
         token_dir.mkdir(parents=True, exist_ok=True)
         return token_dir / "tokens.json"
+
+    def _get_api_key_storage_path(self) -> Path:
+        """Get the path for storing API key"""
+        token_dir = Path.home() / ".artisan" / "auth"
+        token_dir.mkdir(parents=True, exist_ok=True)
+        return token_dir / "api_key.json"
     
     def _load_stored_tokens(self):
         """Load tokens from persistent storage"""
@@ -341,6 +415,7 @@ class GlobalAuthManager(QObject):
                         expires_at=expires_at,
                         token_type=data.get('token_type', 'Bearer')
                     )
+                    self.auth_method = "oauth"
                     _log.info("Loaded valid tokens from storage")
                 else:
                     _log.info("Stored tokens have expired")
@@ -357,6 +432,22 @@ class GlobalAuthManager(QObject):
         except Exception as e:
             _log.error(f"Failed to load stored tokens: {e}")
             self.clear_tokens()
+
+    def _load_stored_api_key(self):
+        """Load API key from persistent storage"""
+        try:
+            api_key_path = self._get_api_key_storage_path()
+            if api_key_path.exists():
+                with open(api_key_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    
+                api_key = data.get('api_key')
+                if api_key and api_key.startswith('ccr_'):
+                    self.api_key = api_key
+                    self.auth_method = "api_key"
+                    _log.info("Loaded API key from storage")
+        except Exception as e:
+            _log.error(f"Failed to load stored API key: {e}")
     
     def _save_tokens(self):
         """Save tokens to persistent storage"""
@@ -380,32 +471,58 @@ class GlobalAuthManager(QObject):
         except Exception as e:
             _log.error(f"Failed to save tokens: {e}")
     
+    def _save_api_key(self):
+        """Save API key to persistent storage"""
+        try:
+            if not self.api_key:
+                return
+                
+            api_key_path = self._get_api_key_storage_path()
+            data = {
+                'api_key': self.api_key,
+                'saved_at': time.time()
+            }
+            
+            with open(api_key_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+                
+            _log.debug("API key saved to storage")
+        except Exception as e:
+            _log.error(f"Failed to save API key: {e}")
+    
     def clear_tokens(self):
-        """Clear all tokens"""
+        """Clear all tokens and API keys"""
         self.current_token = None
+        self.api_key = None
+        self.auth_method = "none"
         try:
             token_path = self._get_token_storage_path()
             if token_path.exists():
                 token_path.unlink()
                 _log.info("Cleared stored tokens")
+            
+            api_key_path = self._get_api_key_storage_path()
+            if api_key_path.exists():
+                api_key_path.unlink()
+                _log.info("Cleared stored API key")
         except Exception as e:
-            _log.error(f"Failed to clear stored tokens: {e}")
+            _log.error(f"Failed to clear stored credentials: {e}")
     
     def get_token_info(self) -> Optional[Dict[str, Any]]:
         """Get current token information for debugging"""
-        if not self.current_token:
-            return None
-            
-        return {
-            'access_token': self.current_token.access_token[:20] + '...',
-            'refresh_token': self.current_token.refresh_token[:20] + '...',
-            'expires_at': self.current_token.expires_at,
-            'expires_in': max(0, self.current_token.expires_at - int(time.time())),
-            'is_expired': self.is_token_expired()
-        }
-    
-    
-    def clear_tokens(self):
-        """Clear all tokens"""
-        self.current_token = None
-        # Clear from storage
+        if self.auth_method == "api_key" and self.api_key:
+            return {
+                'api_key': self.api_key[:12] + '...' if len(self.api_key) > 12 else self.api_key,
+                'auth_method': 'api_key',
+                'is_expired': False
+            }
+        elif self.auth_method == "oauth" and self.current_token:
+            return {
+                'access_token': self.current_token.access_token[:20] + '...',
+                'refresh_token': self.current_token.refresh_token[:20] + '...',
+                'expires_at': self.current_token.expires_at,
+                'expires_in': max(0, self.current_token.expires_at - int(time.time())),
+                'is_expired': self.is_token_expired(),
+                'auth_method': 'oauth'
+            }
+        return None
