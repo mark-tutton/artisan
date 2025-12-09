@@ -5035,79 +5035,16 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
         """Initialize and register plugins"""
         from artisanlib.plugins.live_broadcast_plugin import LiveBroadcastPlugin
         from artisanlib.plugins.inventory_fetcher import InventoryFetcherPlugin
+        from artisanlib.plugins.autosave import AutosavePlugin
 
         
         # Register plugins
         self.plugin_manager.register_plugin(LiveBroadcastPlugin)
         self.plugin_manager.register_plugin(InventoryFetcherPlugin)
+        self.plugin_manager.register_plugin(AutosavePlugin)
+        
         self.inventory_fetcher_plugin = InventoryFetcherPlugin() # FIXME: blocking main UI thread
-        self.inventory_fetcher_plugin.initialize(self) # 
-
-
-    # def initialize_plugins(self):
-    #     """Initialize and register plugins"""
-    #     from artisanlib.plugins.live_broadcast_plugin import LiveBroadcastPlugin
-    #     from artisanlib.plugins.inventory_fetcher import InventoryFetcherPlugin
-        
-    #     # Register the plugins we know exist
-    #     self.plugin_manager.register_plugin(LiveBroadcastPlugin)
-    #     self.plugin_manager.register_plugin(InventoryFetcherPlugin)
-        
-    #     # Load plugin enable/disable states from configuration
-    #     self._load_plugin_states()
-        
-    #     # Initialize the inventory fetcher plugin reference for backward compatibility
-    #     # This allows existing code to still access it directly if needed
-    #     self.inventory_fetcher_plugin = self.plugin_manager.get_plugin("Inventory Fetcher")
-        
-    #     # Simple logging without complex status queries that might hang
-    #     _log.info("Plugin initialization complete")
-    #     _log.info(f"Registered plugins: {list(self.plugin_manager.plugins.keys())}")
-    
-    # def _load_plugin_states(self):
-    #     """Load plugin enable/disable states from configuration"""
-    #     try:
-    #         # Load from QSettings or configuration file
-    #         from PyQt6.QtCore import QSettings
-    #         settings = QSettings()
-    #         settings.beginGroup("Plugins")
-            
-    #         for plugin_name in self.plugin_manager.plugins.keys():
-    #             # Get the stored state, default to enabled
-    #             enabled = settings.value(f"{plugin_name}/enabled", True, type=bool)
-    #             auto_enable = settings.value(f"{plugin_name}/auto_enable", True, type=bool)
-                
-    #             plugin = self.plugin_manager.get_plugin(plugin_name)
-    #             if plugin:
-    #                 plugin.set_auto_enable(auto_enable)
-    #                 if not enabled:
-    #                     plugin.disable()
-    #                     _log.info(f"Plugin {plugin_name} loaded in disabled state")
-    #                 else:
-    #                     _log.info(f"Plugin {plugin_name} loaded in enabled state")
-            
-    #         settings.endGroup()
-            
-    #     except Exception as e:
-    #         _log.error(f"Failed to load plugin states: {e}")
-    
-    # def _save_plugin_states(self):
-    #     """Save plugin enable/disable states to configuration"""
-    #     try:
-    #         from PyQt6.QtCore import QSettings
-    #         settings = QSettings()
-    #         settings.beginGroup("Plugins")
-            
-    #         for plugin_name, reg in self.plugin_manager.plugins.items():
-    #             plugin = reg.plugin
-    #             settings.setValue(f"{plugin_name}/enabled", plugin.is_enabled)
-    #             settings.setValue(f"{plugin_name}/auto_enable", plugin._auto_enable)
-            
-    #         settings.endGroup()
-    #         _log.info("Plugin states saved to configuration")
-            
-    #     except Exception as e:
-    #         _log.error(f"Failed to save plugin states: {e}")
+        self.inventory_fetcher_plugin.initialize(self) 
 
         
 
@@ -13547,6 +13484,7 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
     # Add support to handle saving more than 2 formats via autosave and uploading to external server
     def automaticsave(self, interactive:bool = True) -> Optional[str]:
         try:
+            print(f"AUTOSAVE DEBUG - automaticsave() called, autosavepath={getattr(self.qmc, 'autosavepath', None)}, autosaveflag={getattr(self.qmc, 'autosaveflag', None)}")
             if self.qmc.autosavepath and self.qmc.autosaveflag:
                 prefix = ''
                 if self.qmc.autosaveprefix != '':
@@ -13572,6 +13510,43 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
                     self.sendmessage(QApplication.translate('Message', 'Profile {0} saved in: {1}').format(filename, self.qmc.autosavepath))
                     self.setCurrentFile(filename_path, self.qmc.autosaveaddtorecentfilesflag)
                     self.qmc.fileCleanSignal.emit()
+
+
+                    # # --- Upload main .alog file to external server if enabled ---
+                    # upload_enabled = getattr(self.qmc, 'autosave_upload_to_server', False)
+                    # server_url = getattr(self.qmc, 'autosave_server_url', '')
+                    
+                    # if upload_enabled and server_url:
+                    #     _log.info(f"AUTOSAVE DEBUG - Attempting upload of main file: {filename_path}")
+                        
+                    #     if os.path.exists(filename_path):
+                    #         try:
+                    #             if hasattr(self, "addserial"):
+                    #                 self.addserial(f"Uploading {filename_path} to server.")
+                                    
+                    #             if hasattr(self, 'upload_to_server') and callable(self.upload_to_server):
+                    #                 _log.info(f"AUTOSAVE DEBUG - Using enhanced upload method for main file")
+                    #                 result = self.upload_to_server(filename_path, server_url, {'format': 'alog'})
+                    #                 if result:
+                    #                     if hasattr(self, "addmessage"):
+                    #                         self.addmessage(f"Uploaded {filename_path} to server.")
+                    #                     _log.info(f"AUTOSAVE DEBUG - Main file upload successful: {filename_path}")
+                    #                 else:
+                    #                     if hasattr(self, "addmessage"):
+                    #                         self.addmessage(f"Upload failed: {filename_path}")
+                    #                     _log.error(f"AUTOSAVE DEBUG - Main file upload failed: {filename_path}")
+                    #             else:
+                    #                 _log.warning(f"AUTOSAVE DEBUG - Enhanced upload method not available for main file")
+                    #         except Exception as e:
+                    #             if hasattr(self, "addserial"):
+                    #                 self.addserial(f"Failed to upload {filename_path}: {e}")
+                    #             if hasattr(self, "addmessage"):
+                    #                 self.addmessage(f"Failed to upload {filename_path}: {e}")
+                    #             _log.error(f"AUTOSAVE DEBUG - Main file upload error: {e}")
+                    #     else:
+                    #         _log.warning(f"AUTOSAVE DEBUG - Main file does not exist: {filename_path}")
+                    # # --- END main file upload ---
+
 
                     # --- Save all enabled extra formats ---
                     extra_autosaves = [
@@ -19852,16 +19827,16 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
             if 'canvas' in self.qmc.palette:
                 self.updateCanvasColors(checkColors=False)
 
-            # Load autosave plugin configuration into qmc object
-            try:
-                from artisanlib.plugins.autosave.autosave_addons import load_config_to_qmc, integrate_with_automaticsave
-                load_config_to_qmc(self)
-                integrate_with_automaticsave(self)
-            except ImportError:
-                # Autosave addons not available, skip silently
-                pass
-            except Exception as e: # pylint: disable=broad-except
-                _log.exception(e)
+            # # Load autosave plugin configuration into qmc object
+            # try:
+            #     from artisanlib.plugins.autosave.autosave_addons import load_config_to_qmc, integrate_with_automaticsave
+            #     load_config_to_qmc(self)
+            #     integrate_with_automaticsave(self)
+            # except ImportError:
+            #     # Autosave addons not available, skip silently
+            #     pass
+            # except Exception as e: # pylint: disable=broad-except
+            #     _log.exception(e)
 
 
         except Exception as e: # pylint: disable=broad-except

@@ -20,6 +20,7 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject
 from ..base import PluginBase
 from .config import AutosaveAddonConfig
 from ..auth_manager import GlobalAuthManager
+from ..auth_dialog import AuthDialog
 
 _log = logging.getLogger(__name__)
 
@@ -37,17 +38,14 @@ class ServerHealthChecker(QObject):
     connection_error = pyqtSignal(str)
     token_refresh_needed = pyqtSignal()  
 
-
     def __init__(self, config: AutosaveAddonConfig):
         QObject.__init__(self)
-        
         
         self.config = config
          
         # Validate URLs
         self.config.autosave_server_url = _validate_url(self.config.autosave_server_url)
         self.config.autosave_health_url = _validate_url(self.config.autosave_health_url)
-        
 
         self.is_healthy = False
         self.last_check = 0
@@ -74,31 +72,41 @@ class ServerHealthChecker(QObject):
             health_url = self.config.autosave_health_url
             _log.debug(f"Checking server health at: {health_url}")
 
+            headers = self.auth_manager.get_auth_headers()
+
             response = requests.get(
                 health_url,
                 timeout=self.config.autosave_connection_timeout,
-                headers=self._get_auth_headers(),
+                headers=headers,
             )
 
             _log.debug(f"Health check response: {response.status_code}")
             
             # Handle 401 Unauthorized - token might be expired
             if response.status_code == 401:
-                _log.warning("Health check returned 401 - token may be expired")
-                if self.config.autosave_auto_refresh and self.auth_manager.current_token:
-                    _log.info("Attempting automatic token refresh...")
-                    if self.auth_manager.refresh_token():
-                        _log.info("Token refreshed, retrying health check")
-                        # Retry health check with new token
-                        response = requests.get(
-                            health_url,
-                            timeout=self.config.autosave_connection_timeout,
-                            headers=self._get_auth_headers(),
-                        )
-                    else:
-                        _log.error("Token refresh failed")
-                        self.token_refresh_needed.emit()
-                        return
+                _log.warning("Health check returned 401 - authentication may be expired")
+                # Only try refresh for OAuth tokens, not API keys
+                if self.auth_manager.auth_method == "oauth":
+                    if self.config.autosave_auto_refresh:
+                        _log.info("Attempting automatic token refresh...")
+                        if self.auth_manager.refresh_token():
+                            _log.info("Token refreshed, retrying health check")
+                            # Retry health check with new token
+                            headers = self.auth_manager.get_auth_headers()
+                            response = requests.get(
+                                health_url,
+                                timeout=self.config.autosave_connection_timeout,
+                                headers=headers,
+                            )
+                        else:
+                            _log.error("Token refresh failed")
+                            self.token_refresh_needed.emit()
+                            return
+                else:
+                    # API key auth - can't refresh, just report error
+                    _log.error("API key authentication failed")
+                    self.token_refresh_needed.emit()
+                    return
             
             if response.status_code == 200:
                 _log.debug(f"Response content: {response.text[:200]}...")
@@ -139,104 +147,8 @@ class ServerHealthChecker(QObject):
         self.last_check = time.time()
 
     def _get_auth_headers(self) -> Dict[str, str]:
-        """Get authentication headers based on config"""
-        headers = {}
-
-        # Use global auth manager if tokens are available
-        token = self.auth_manager.get_valid_token()
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-            return headers
-
-        # Fallback to config-based auth
-        if self.config.autosave_auth_type == "api_token" and self.config.autosave_api_token:
-            headers["X-API-Key"] = self.config.autosave_api_token
-        elif self.config.autosave_auth_type in ["jwt", "bearer"]:
-            # Use config JWT token as fallback
-            if self.config.autosave_jwt_token:
-                headers["Authorization"] = f"Bearer {self.config.autosave_jwt_token}"
-
-        return headers
-
-
-    def _on_auth_success_impl(self, access_token: str, refresh_token: str):
-        """Handle successful authentication"""
-        self.logger.info("Authentication successful - updating autosave config")
-        
-        # Update autosave config with new tokens
-        self.config.autosave_jwt_token = access_token
-        self.config.autosave_refresh_token = refresh_token
-        self.config.autosave_token_expires_at = int(time.time()) + 3600  # 1 hour
-        
-        # Save config
-        self.config.save()
-        
-        # Update UI
-        self._update_auth_status()
-    
-    def _on_token_refreshed_impl(self, access_token: str, refresh_token: str):
-        """Handle token refresh"""
-        self.logger.info("Token refreshed - updating autosave config")
-        
-        # Update config with new tokens
-        self.config.autosave_jwt_token = access_token
-        self.config.autosave_refresh_token = refresh_token
-        self.config.autosave_token_expires_at = int(time.time()) + 3600
-        
-        # Save config
-        self.config.save()
-    
-    def _on_token_expired_impl(self):
-        """Handle token expiration"""
-        self.logger.warning("Token expired - clearing autosave config")
-        
-        # Clear tokens from config
-        self.config.autosave_jwt_token = ""
-        self.config.autosave_refresh_token = ""
-        self.config.autosave_token_expires_at = 0
-        
-        # Save config
-        self.config.save()
-        
-        # Update UI
-        self._update_auth_status()
-    
-    def _update_auth_status(self):
-        """Update UI to reflect auth status"""
-        if hasattr(self, 'config_dialog') and self.config_dialog:
-            # Update config dialog if it's open
-            if hasattr(self.config_dialog, 'auth_token_edit'):
-                self.config_dialog.auth_token_edit.setText(self.config.autosave_jwt_token)
-            if hasattr(self.config_dialog, 'refresh_token_edit'):
-                self.config_dialog.refresh_token_edit.setText(self.config.autosave_refresh_token)
-    
-    def get_auth_headers(self) -> Dict[str, str]:
-        """Get authentication headers for API calls"""
-        token = self.get_auth_token()
-        if token:
-            return {"Authorization": f"Bearer {token}"}
-        return {}
-    
-    def make_authenticated_request(self, url: str, method: str = "GET", **kwargs) -> Optional[requests.Response]:
-        """Make an authenticated API request"""
-        headers = self.get_auth_headers()
-        if 'headers' in kwargs:
-            headers.update(kwargs['headers'])
-        kwargs['headers'] = headers
-        
-        try:
-            if method.upper() == "GET":
-                return requests.get(url, **kwargs)
-            elif method.upper() == "POST":
-                return requests.post(url, **kwargs)
-            elif method.upper() == "PUT":
-                return requests.put(url, **kwargs)
-            elif method.upper() == "DELETE":
-                return requests.delete(url, **kwargs)
-        except Exception as e:
-            self.logger.error(f"Authenticated request failed: {e}")
-            return None
-
+        """Get authentication headers using global auth manager"""
+        return self.auth_manager.get_auth_headers()
 
     def upload_file(self, file_path: str, file_type: str) -> bool:
         """Upload a file to the server with retry logic and token refresh"""
@@ -256,7 +168,7 @@ class ServerHealthChecker(QObject):
 
                     _log.info(f"Attempting upload {attempt + 1}: {file_path}")
 
-                    headers = self._get_auth_headers()
+                    headers = self.auth_manager.get_auth_headers()
                     if "Content-Type" in headers:
                         del headers["Content-Type"]
 
@@ -274,18 +186,21 @@ class ServerHealthChecker(QObject):
                         _log.info(f"File uploaded successfully: {file_path}")
                         return True
                     elif response.status_code == 401:
-                        _log.warning(f"Upload failed with 401 - token may be expired")
-                        if self.config.autosave_auto_refresh and self.auth_manager.current_token:
-                            _log.info("Attempting token refresh for upload...")
-                            if self.auth_manager.refresh_token():
-                                _log.info("Token refreshed, retrying upload")
-                                continue  # Retry with new token
-                            else:
-                                _log.error("Token refresh failed during upload")
-                                self.token_refresh_needed.emit()
-                                return False
+                        _log.warning(f"Upload failed with 401 - authentication may be expired")
+                        if self.auth_manager.auth_method == "oauth":
+                            if self.config.autosave_auto_refresh:
+                                _log.info("Attempting token refresh for upload...")
+                                if self.auth_manager.refresh_token():
+                                    _log.info("Token refreshed, retrying upload")
+                                    continue  # Retry with new token
+                                else:
+                                    _log.error("Token refresh failed during upload")
+                                    self.token_refresh_needed.emit()
+                                    return False
                         else:
-                            _log.error("No refresh token available for upload")
+                            # API key auth - can't refresh
+                            _log.error("API key authentication failed")
+                            self.token_refresh_needed.emit()
                             return False
                     else:
                         _log.warning(f"Upload failed (attempt {attempt + 1}): {response.status_code}")
@@ -306,10 +221,7 @@ class ServerHealthChecker(QObject):
 
     def get_auth_headers(self) -> Dict[str, str]:
         """Get authentication headers for API calls"""
-        token = self.get_auth_token()
-        if token:
-            return {"Authorization": f"Bearer {token}"}
-        return {}
+        return self.auth_manager.get_auth_headers()
 
     def stop(self) -> None:
         """Stop the health checker"""
@@ -375,14 +287,6 @@ def integrate_with_automaticsave(aw):
         _log.info(f"AUTOSAVE PLUGIN DEBUG - Server URL: {_config.autosave_server_url}")
         _log.info(f"AUTOSAVE PLUGIN DEBUG - Health URL: {_config.autosave_health_url}")
         _log.info(f"AUTOSAVE PLUGIN DEBUG - Upload enabled: {_config.autosave_upload_to_server}")
-
-        def set_auth_tokens(access_token: str, refresh_token: str, expires_in: int):
-            """Set authentication tokens (call this after login)"""
-            health_checker.set_tokens(access_token, refresh_token, expires_in)
-            _log.info("Authentication tokens set for autosave plugin")
-        
-        aw.set_autosave_auth_tokens = set_auth_tokens
-        
 
         def enhanced_upload_to_server(filepath: str, server_url: str, extra_params: dict = None):
             """Enhanced upload method with health checking and retry logic"""
@@ -454,27 +358,65 @@ def create_server_upload_widgets(aw):
     serverHealthUrlEdit = QLineEdit(_config.autosave_health_url)
     serverHealthUrlEdit.setPlaceholderText("http://localhost:5101/api/files/health")
 
-    # Create authentication type selector
-    authTypeLabel = QLabel(QApplication.translate("Label", "Authentication:"))
-    authTypeCombo = QComboBox()
-    authTypeCombo.addItems(["None", "API Token", "JWT Token", "Bearer Token"])
-
-    # Set current auth type
-    auth_type_map = {"none": 0, "api_token": 1, "jwt": 2, "bearer": 3}
-    current_index = auth_type_map.get(_config.autosave_auth_type, 0)
-    authTypeCombo.setCurrentIndex(current_index)
-
-    # Create API token input
-    apiTokenLabel = QLabel(QApplication.translate("Label", "API Token:"))
-    apiTokenEdit = QLineEdit(_config.autosave_api_token)
-    apiTokenEdit.setPlaceholderText("Enter your API token")
-    apiTokenEdit.setEchoMode(QLineEdit.EchoMode.Password)
-
-    # Create JWT token input
-    jwtTokenLabel = QLabel(QApplication.translate("Label", "JWT Token:"))
-    jwtTokenEdit = QLineEdit(_config.autosave_jwt_token)
-    jwtTokenEdit.setPlaceholderText("Enter your JWT token")
-    jwtTokenEdit.setEchoMode(QLineEdit.EchoMode.Password)
+    # Authentication section - use global auth manager
+    authLabel = QLabel(QApplication.translate("Label", "Authentication:"))
+    authStatusLabel = QLabel("Checking...")
+    authStatusLabel.setStyleSheet("color: orange;")
+    
+    # Button to open auth dialog
+    authButton = QPushButton(QApplication.translate("Button", "🔐 Authenticate"))
+    
+    def on_auth_button_clicked():
+        """Open global authentication dialog"""
+        auth_manager = GlobalAuthManager()
+        dialog = AuthDialog()
+        if dialog.exec():
+            # Update auth status after successful authentication
+            update_auth_status()
+            _log.info("Authentication successful")
+        else:
+            update_auth_status()
+    
+    authButton.clicked.connect(on_auth_button_clicked)
+    
+    def update_auth_status():
+        """Update authentication status display"""
+        auth_manager = GlobalAuthManager()
+        if auth_manager.is_authenticated():
+            token_info = auth_manager.get_token_info()
+            if token_info:
+                auth_method = token_info.get('auth_method', 'unknown')
+                if auth_method == 'api_key':
+                    authStatusLabel.setText(f"✅ Authenticated (API Key)")
+                elif auth_method == 'oauth':
+                    if token_info.get('is_expired', False):
+                        authStatusLabel.setText("⚠️ Token Expired")
+                        authStatusLabel.setStyleSheet("color: orange;")
+                    else:
+                        expires_in = token_info.get('expires_in', 0)
+                        hours = expires_in // 3600
+                        minutes = (expires_in % 3600) // 60
+                        authStatusLabel.setText(f"✅ Authenticated (OAuth - expires in {hours}h {minutes}m)")
+                        authStatusLabel.setStyleSheet("color: green;")
+                else:
+                    authStatusLabel.setText("✅ Authenticated")
+                    authStatusLabel.setStyleSheet("color: green;")
+            else:
+                authStatusLabel.setText("✅ Authenticated")
+                authStatusLabel.setStyleSheet("color: green;")
+        else:
+            authStatusLabel.setText("❌ Not authenticated")
+            authStatusLabel.setStyleSheet("color: red;")
+    
+    # Update auth status on load
+    update_auth_status()
+    
+    # Connect to auth manager signals to update status when auth changes
+    auth_manager = GlobalAuthManager()
+    auth_manager.login_successful.connect(update_auth_status)
+    auth_manager.login_failed.connect(update_auth_status)
+    auth_manager.token_refreshed.connect(update_auth_status)
+    auth_manager.token_expired.connect(update_auth_status)
 
     # Create connection settings
     timeoutLabel = QLabel(QApplication.translate("Label", "Connection Timeout (seconds):"))
@@ -488,8 +430,8 @@ def create_server_upload_widgets(aw):
     statusIndicator = QLabel("Checking...")
     statusIndicator.setStyleSheet("color: orange;")
 
-    # Add token management section
-    tokenGroupBox = QGroupBox(QApplication.translate("GroupBox", "JWT Token Management"))
+    # Add token management section (for OAuth tokens only)
+    tokenGroupBox = QGroupBox(QApplication.translate("GroupBox", "Token Management"))
     tokenLayout = QVBoxLayout()
     
     # Token status
@@ -505,7 +447,7 @@ def create_server_upload_widgets(aw):
     autoRefreshCheckbox = QCheckBox(QApplication.translate("CheckBox", "Auto-refresh tokens"))
     autoRefreshCheckbox.setChecked(_config.autosave_auto_refresh)
     
-    # Manual refresh button
+    # Manual refresh button (only for OAuth)
     refreshTokenButton = QPushButton(QApplication.translate("Button", "🔄 Refresh Token"))
     
     # Clear tokens button
@@ -533,34 +475,64 @@ def create_server_upload_widgets(aw):
 
     def update_token_status():
         """Update token status display"""
-        if health_checker.auth_manager.current_token:
-            if health_checker.auth_manager.is_token_expired():
-                tokenStatusIndicator.setText("Expired")
-                tokenStatusIndicator.setStyleSheet("color: red;")
-            else:
-                tokenStatusIndicator.setText("Valid")
-                tokenStatusIndicator.setStyleSheet("color: green;")
+        auth_manager = GlobalAuthManager()
+        token_info = auth_manager.get_token_info()
+        
+        if token_info:
+            auth_method = token_info.get('auth_method', 'unknown')
             
-            # Show expiry time
-            expiry_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(health_checker.auth_manager.current_token.expires_at))
-            tokenExpiryInfo.setText(expiry_time)
+            if auth_method == 'api_key':
+                tokenStatusIndicator.setText("API Key (no expiry)")
+                tokenStatusIndicator.setStyleSheet("color: green;")
+                tokenExpiryInfo.setText("N/A")
+                refreshTokenButton.setEnabled(False)  # Can't refresh API keys
+            elif auth_method == 'oauth':
+                if token_info.get('is_expired', False):
+                    tokenStatusIndicator.setText("Expired")
+                    tokenStatusIndicator.setStyleSheet("color: red;")
+                    refreshTokenButton.setEnabled(True)
+                else:
+                    tokenStatusIndicator.setText("Valid")
+                    tokenStatusIndicator.setStyleSheet("color: green;")
+                    refreshTokenButton.setEnabled(True)
+                
+                # Show expiry time for OAuth tokens
+                expires_at = token_info.get('expires_at')
+                if expires_at:
+                    expiry_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(expires_at))
+                    tokenExpiryInfo.setText(expiry_time)
+                else:
+                    tokenExpiryInfo.setText("Unknown")
+            else:
+                tokenStatusIndicator.setText("Unknown")
+                tokenStatusIndicator.setStyleSheet("color: orange;")
+                tokenExpiryInfo.setText("Unknown")
+                refreshTokenButton.setEnabled(False)
         else:
             tokenStatusIndicator.setText("No token")
             tokenStatusIndicator.setStyleSheet("color: red;")
             tokenExpiryInfo.setText("Unknown")
+            refreshTokenButton.setEnabled(False)
 
     def on_refresh_token_clicked():
-        """Handle manual token refresh"""
-        if health_checker.auth_manager.refresh_token():
-            update_token_status()
-            _log.info("Manual token refresh successful")
+        """Handle manual token refresh (OAuth only)"""
+        auth_manager = GlobalAuthManager()
+        if auth_manager.auth_method == "oauth":
+            if auth_manager.refresh_token():
+                update_token_status()
+                update_auth_status()
+                _log.info("Manual token refresh successful")
+            else:
+                _log.error("Manual token refresh failed")
         else:
-            _log.error("Manual token refresh failed")
+            _log.warning("Token refresh only available for OAuth tokens")
 
     def on_clear_tokens_clicked():
         """Handle token clearing"""
-        health_checker.auth_manager.clear_tokens()
+        auth_manager = GlobalAuthManager()
+        auth_manager.clear_tokens()
         update_token_status()
+        update_auth_status()
         _log.info("Tokens cleared")
 
     def on_auto_refresh_changed(checked):
@@ -575,23 +547,10 @@ def create_server_upload_widgets(aw):
     # Connect token refresh needed signal
     def on_token_refresh_needed():
         update_token_status()
+        update_auth_status()
         _log.warning("Token refresh needed - please check authentication")
 
     health_checker.token_refresh_needed.connect(on_token_refresh_needed)
-
-
-    # Connect auth type changes to show/hide token fields
-    def on_auth_type_changed(index):
-        apiTokenLabel.setVisible(index == 1)  # API Token
-        apiTokenEdit.setVisible(index == 1)
-        jwtTokenLabel.setVisible(index in [2, 3])  # JWT or Bearer
-        jwtTokenEdit.setVisible(index in [2, 3])
-
-    authTypeCombo.currentIndexChanged.connect(on_auth_type_changed)
-    on_auth_type_changed(current_index)  # Initial state
-
-    # Get the health checker and connect signals
-    health_checker = get_health_checker()
 
     def on_health_status_changed(is_healthy):
         try:
@@ -632,18 +591,19 @@ def create_server_upload_widgets(aw):
     refreshButton = QPushButton(QApplication.translate("Button", "🔄 Check Server"))
     refreshButton.clicked.connect(trigger_health_check)
 
+    # Initial token status update
+    update_token_status()
+
     # Add widgets
     layout.addWidget(uploadToServerCheckbox)
     layout.addWidget(QLabel(QApplication.translate("Label", "Server URL:")))
     layout.addWidget(serverUrlEdit)
     layout.addWidget(QLabel(QApplication.translate("Label", "Server Health URL:")))
     layout.addWidget(serverHealthUrlEdit)
-    layout.addWidget(authTypeLabel)
-    layout.addWidget(authTypeCombo)
-    layout.addWidget(apiTokenLabel)
-    layout.addWidget(apiTokenEdit)
-    layout.addWidget(jwtTokenLabel)
-    layout.addWidget(jwtTokenEdit)
+    layout.addWidget(authLabel)
+    layout.addWidget(authStatusLabel)
+    layout.addWidget(authButton)
+    layout.addWidget(tokenGroupBox)
     layout.addWidget(timeoutLabel)
     layout.addWidget(timeoutEdit)
     layout.addWidget(retryLabel)
@@ -658,9 +618,8 @@ def create_server_upload_widgets(aw):
     group_box.uploadToServerCheckbox = uploadToServerCheckbox
     group_box.serverUrlEdit = serverUrlEdit
     group_box.serverHealthUrlEdit = serverHealthUrlEdit
-    group_box.authTypeCombo = authTypeCombo
-    group_box.apiTokenEdit = apiTokenEdit
-    group_box.jwtTokenEdit = jwtTokenEdit
+    group_box.authStatusLabel = authStatusLabel
+    group_box.authButton = authButton
     group_box.timeoutEdit = timeoutEdit
     group_box.retryEdit = retryEdit
     group_box.statusIndicator = statusIndicator
@@ -670,7 +629,11 @@ def create_server_upload_widgets(aw):
         try:
             health_checker.health_status_changed.disconnect(on_health_status_changed)
             health_checker.connection_error.disconnect(on_connection_error)
-            _log.debug("Disconnected health checker signals")
+            auth_manager.login_successful.disconnect(update_auth_status)
+            auth_manager.login_failed.disconnect(update_auth_status)
+            auth_manager.token_refreshed.disconnect(update_auth_status)
+            auth_manager.token_expired.disconnect(update_auth_status)
+            _log.debug("Disconnected health checker and auth manager signals")
         except Exception as e:
             _log.debug(f"Error disconnecting signals: {e}")
 
@@ -738,13 +701,6 @@ def save_widget_values_to_config(
     _config.autosave_server_url = uploadGroupBox.serverUrlEdit.text()
     _config.autosave_health_url = uploadGroupBox.serverHealthUrlEdit.text()
 
-    # Map auth type from combo box
-    auth_type_map = {0: "none", 1: "api_token", 2: "jwt", 3: "bearer"}
-    _config.autosave_auth_type = auth_type_map[uploadGroupBox.authTypeCombo.currentIndex()]
-
-    _config.autosave_api_token = uploadGroupBox.apiTokenEdit.text()
-    _config.autosave_jwt_token = uploadGroupBox.jwtTokenEdit.text()
-
     try:
         _config.autosave_connection_timeout = int(uploadGroupBox.timeoutEdit.text())
         _config.autosave_retry_attempts = int(uploadGroupBox.retryEdit.text())
@@ -781,9 +737,6 @@ def load_config_to_qmc(aw):
     qmc.autosave_upload_to_server = _config.autosave_upload_to_server
     qmc.autosave_server_url = _config.autosave_server_url
     qmc.autosave_health_url = _config.autosave_health_url
-    qmc.autosave_api_token = _config.autosave_api_token
-    qmc.autosave_jwt_token = _config.autosave_jwt_token
-    qmc.autosave_auth_type = _config.autosave_auth_type
 
 
 def cleanup():

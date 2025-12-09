@@ -13393,11 +13393,15 @@ class tgraphcanvas(FigureCanvas):
 #            QApplication.processEvents()  # solves the issue (but is more general as the MPL flush_events (takes ~1sec)
 
             # we autosave after full redraw after OFF to have the optional generated PDF containing all information
+            print(f"AUTOSAVE DEBUG - Redraw autosave check: timex_len={len(self.timex)}, autosaveflag={self.autosaveflag}, autosavepath={self.autosavepath}")
             if len(self.timex) > 2 and self.autosaveflag != 0 and self.autosavepath:
                 try:
+                    print(f"AUTOSAVE DEBUG - Calling automaticsave() from redraw (OFF mode)")
                     self.aw.automaticsave()
                 except Exception as e: # pylint: disable=broad-except
                     _log.exception(e)
+            else:
+                print(f"AUTOSAVE DEBUG - Skipping automaticsave() from redraw - conditions not met")
 
             # update error dlg
             if self.aw.error_dlg:
@@ -14081,11 +14085,26 @@ class tgraphcanvas(FigureCanvas):
                     self.aw.clusterEvents()
             except Exception as e: # pylint: disable=broad-except
                 _log.exception(e)
+
+             # DEBUG: Check autosave conditions
+            _log.error("AUTOSAVE DEBUG - ToggleRecorder autosave check:")
+            _log.error(f"  autosave={autosave}")
+            _log.error(f"  autosaveflag={self.autosaveflag}")
+            _log.error(f"  autosavepath={self.autosavepath}")
+            _log.error(f"  timeindex[0]={self.timeindex[0]} (CHARGE)")
+            _log.error(f"  timeindex[6]={self.timeindex[6]} (DROP)")
+
+
+
             if autosave and self.autosaveflag != 0 and self.autosavepath and self.timeindex[0] != -1 and self.timeindex[6] != 0: # only autosave if CHARGE and DROP are set
                 try:
+                    _log.error(f"AUTOSAVE DEBUG - Calling automaticsave() from ToggleRecorder")
                     self.aw.automaticsave()
                 except Exception as e: # pylint: disable=broad-except
                     _log.exception(e)
+            else:
+                _log.error(f"AUTOSAVE DEBUG - Skipping automaticsave() - conditions not met")
+                _log.error(f"  autosave={autosave}, autosaveflag={self.autosaveflag}, autosavepath={bool(self.autosavepath)}, CHARGE={self.timeindex[0] != -1}, DROP={self.timeindex[6] != 0}")
             self.aw.sendmessage(QApplication.translate('Message','Scope recording stopped'))
             self.aw.buttonSTARTSTOP.setText(QApplication.translate('Button', 'START'))
             self.aw.lowerbuttondialog.setVisible(False)

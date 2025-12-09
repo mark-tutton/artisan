@@ -13,9 +13,11 @@ from .autosave_addons import (
     should_upload_to_server,
     cleanup
 )
+from .autosave_plugin import AutosavePlugin
 
 __all__ = [
     'AutosaveAddonConfig',
+    'AutosavePlugin',
     'get_config',
     'save_config',
     'get_health_checker',
