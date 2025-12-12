@@ -55,8 +55,14 @@ class ServerHealthChecker(QObject):
         # Get global auth manager
         self.auth_manager = GlobalAuthManager()
 
-        if config.autosave_health_check_enabled:
-            self.health_timer.start(config.autosave_health_check_interval * 1000)
+        # if config.autosave_health_check_enabled:
+        #     self.health_timer.start(config.autosave_health_check_interval * 1000)
+
+    def start(self) -> None:
+        """Start the health checker timer"""
+        if self.config.autosave_health_check_enabled:
+            self.health_timer.start(self.config.autosave_health_check_interval * 1000)
+            _log.info("Health checker timer started")
 
     @property
     def name(self) -> str:
@@ -229,7 +235,7 @@ class ServerHealthChecker(QObject):
 
 # Global config and health checker instances
 _config = AutosaveAddonConfig.load_from_file()
-_health_checker = ServerHealthChecker(_config)
+_health_checker = None # ServerHealthChecker(_config)
 
 
 def get_config() -> AutosaveAddonConfig:
@@ -238,7 +244,10 @@ def get_config() -> AutosaveAddonConfig:
 
 
 def get_health_checker() -> ServerHealthChecker:
-    """Get the health checker instance"""
+    """Get the health checker instance (lazy initialization)"""
+    global _health_checker
+    if _health_checker is None:
+        _health_checker = ServerHealthChecker(_config)
     return _health_checker
 
 
