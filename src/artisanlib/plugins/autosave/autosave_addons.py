@@ -49,7 +49,7 @@ class ServerHealthChecker(QObject):
 
         self.is_healthy = False
         self.last_check = 0
-        self.health_timer = QTimer()
+        self.health_timer = QTimer(self)
         self.health_timer.timeout.connect(self._check_server_health)
         
         # Get global auth manager
@@ -646,10 +646,11 @@ def create_server_upload_widgets(aw):
         except Exception as e:
             _log.debug(f"Error disconnecting signals: {e}")
 
-    group_box.destroyed.connect(cleanup_connections)
+    # group_box.destroyed.connect(cleanup_connections)
+    
 
     # Trigger initial health check after a short delay
-    QTimer.singleShot(1000, trigger_health_check)
+    # QTimer.singleShot(1000, trigger_health_check)
 
     return group_box
 

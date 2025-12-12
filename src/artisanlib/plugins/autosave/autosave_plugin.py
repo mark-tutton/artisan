@@ -27,13 +27,19 @@ class AutosavePlugin(PluginBase):
     def version(self) -> str:
         return "2.0.0"
     
-    def _initialize_plugin(self) -> None:
+        def _initialize_plugin(self) -> None:
         """Initialize the autosave plugin"""
         # Load config and setup health checker
         config = get_config()
         health_checker = get_health_checker()
+        
+        health_checker.start()
+        
+        # Trigger initial health check after a short delay
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(1000, health_checker._check_server_health)
 
-        # Set qmc.autosave_upload_to_server, qmc.autosave_server_url, etc.
+        # Set qmc.autosave_upload_to_server, qmc.autosave_server_url
         if self.main_window:
             try:
                 load_config_to_qmc(self.main_window)
@@ -52,7 +58,7 @@ class AutosavePlugin(PluginBase):
             self.logger.warning("Main window not available for autosave integration")
         
         self.logger.info("Autosave plugin initialized")
-    
+        
     def _cleanup_plugin(self) -> None:
         """Cleanup the autosave plugin"""
         cleanup_addons()
