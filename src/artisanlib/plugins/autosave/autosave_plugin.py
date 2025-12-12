@@ -27,7 +27,7 @@ class AutosavePlugin(PluginBase):
     def version(self) -> str:
         return "2.0.0"
     
-        def _initialize_plugin(self) -> None:
+    def _initialize_plugin(self) -> None:
         """Initialize the autosave plugin"""
         # Load config and setup health checker
         config = get_config()
@@ -58,7 +58,7 @@ class AutosavePlugin(PluginBase):
             self.logger.warning("Main window not available for autosave integration")
         
         self.logger.info("Autosave plugin initialized")
-        
+
     def _cleanup_plugin(self) -> None:
         """Cleanup the autosave plugin"""
         cleanup_addons()
