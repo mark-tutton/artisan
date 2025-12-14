@@ -13401,15 +13401,15 @@ class tgraphcanvas(FigureCanvas):
 #            QApplication.processEvents()  # solves the issue (but is more general as the MPL flush_events (takes ~1sec)
 
             # we autosave after full redraw after OFF to have the optional generated PDF containing all information
-            print(f"AUTOSAVE DEBUG - Redraw autosave check: timex_len={len(self.timex)}, autosaveflag={self.autosaveflag}, autosavepath={self.autosavepath}")
+            _log.debug(f"AUTOSAVE DEBUG - Redraw autosave check: timex_len={len(self.timex)}, autosaveflag={self.autosaveflag}, autosavepath={self.autosavepath}")
             if len(self.timex) > 2 and self.autosaveflag != 0 and self.autosavepath:
                 try:
-                    print(f"AUTOSAVE DEBUG - Calling automaticsave() from redraw (OFF mode)")
+                    _log.debug(f"AUTOSAVE DEBUG - Calling automaticsave() from redraw (OFF mode)")
                     self.aw.automaticsave()
                 except Exception as e: # pylint: disable=broad-except
                     _log.exception(e)
             else:
-                print(f"AUTOSAVE DEBUG - Skipping automaticsave() from redraw - conditions not met")
+                _log.debug(f"AUTOSAVE DEBUG - Skipping automaticsave() from redraw - conditions not met")
 
             # update error dlg
             if self.aw.error_dlg:

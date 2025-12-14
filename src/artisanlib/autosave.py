@@ -223,7 +223,10 @@ class autosaveDlg(ArtisanDialog):
         okButton: Optional[QPushButton] = self.dialogbuttons.button(QDialogButtonBox.StandardButton.Ok)
         if okButton is not None:
             okButton.setFocus()
-        self.setFixedHeight(self.sizeHint().height())
+        size_hint = self.sizeHint()
+        min_width = max(400, int(size_hint.width() * 0.7))
+        min_height = max(300, int(size_hint.height() * 0.7))
+        self.setMinimumSize(min_width, min_height)
 
     @pyqtSlot(bool)
     def showautosavehelp(self,_:bool = False) -> None:

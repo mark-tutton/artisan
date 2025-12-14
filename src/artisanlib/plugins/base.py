@@ -6,8 +6,6 @@ from enum import Enum
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from .auth_manager import GlobalAuthManager
-
 try:
     from PyQt6.QtWidgets import QMenu, QMainWindow
     from PyQt6.QtCore import QObject, pyqtSignal, QThread, QMutex, QTimer
@@ -111,17 +109,13 @@ class PluginBase(QObject):
         self.operation_times: Dict[str, List[float]] = {}
         
         # Auth
-        self.auth_manager = GlobalAuthManager()
+        self.auth_manager = None
+        self._auth_signals_connected = False
 
-        # connect to auth manager signals
-        self.auth_manager.login_successful.connect(self._on_auth_login_success)
-        self.auth_manager.login_failed.connect(self._on_auth_login_failed)
-        self.auth_manager.token_refreshed.connect(self._on_auth_token_refreshed)
-        self.auth_manager.token_expired.connect(self._on_auth_token_expired)
 
         self.logger = logging.getLogger(f"artisan.plugins.{self.name}")
         self._setup_logging()
-        self._setup_worker_thread()
+        self._setup_worker_thread_delayed()
 
 
     
@@ -139,6 +133,24 @@ class PluginBase(QObject):
         
         self.logger.setLevel(logging.INFO)
     
+    def _setup_worker_thread_delayed(self) -> None:
+        """Setup worker thread after QApplication is ready"""
+        def delayed_setup():
+            try:
+                from PyQt6.QtWidgets import QApplication
+                app = QApplication.instance()
+                if app is None:
+                    self.logger.warning("QApplication not ready, retrying worker thread setup")
+                    QTimer.singleShot(1000, delayed_setup)
+                    return
+                
+                self._setup_worker_thread()
+            except Exception as e:
+                self.logger.warning(f"Could not setup worker thread: {e}")
+                QTimer.singleShot(1000, delayed_setup)
+        
+        QTimer.singleShot(2000, delayed_setup)    
+
     def _setup_worker_thread(self) -> None:
         """Setup worker thread for long-running operations"""
         self._worker_thread = QThread()
@@ -227,6 +239,35 @@ class PluginBase(QObject):
     def has_errors(self) -> bool:
         """Check if plugin has encountered errors"""
         return len(self.errors) > 0
+    
+    @property
+    def auth_manager(self):
+        """Lazy initialization of GlobalAuthManager to avoid QObject creation before QApplication is ready"""
+        if self._auth_manager is None:
+            from .auth_manager import get_auth_manager
+            self._auth_manager = get_auth_manager()
+            if self._auth_manager is None:
+                return None
+            # connect signals
+            if not self._auth_signals_connected:
+                self._auth_manager.login_successful.connect(self._on_auth_login_success)
+                self._auth_manager.login_failed.connect(self._on_auth_login_failed)
+                self._auth_manager.token_refreshed.connect(self._on_auth_token_refreshed)
+                self._auth_manager.token_expired.connect(self._on_auth_token_expired)
+                self._auth_signals_connected = True
+        return self._auth_manager
+    
+    @auth_manager.setter
+    def auth_manager(self, value):
+        """Allow setting auth_manager from subclasses"""
+        self._auth_manager = value
+        # reconnect signals
+        if value is not None and not self._auth_signals_connected:
+            value.login_successful.connect(self._on_auth_login_success)
+            value.login_failed.connect(self._on_auth_login_failed)
+            value.token_refreshed.connect(self._on_auth_token_refreshed)
+            value.token_expired.connect(self._on_auth_token_expired)
+            self._auth_signals_connected = True
     
     def _change_state(self, new_state: PluginState) -> None:
         """Safely change plugin state and emit signal"""
@@ -499,10 +540,20 @@ class PluginBase(QObject):
     
     def get_auth_token(self) -> Optional[str]:
         """Get current valid auth token"""
-        return self.auth_manager.get_valid_token()
+        try:
+            if self._auth_manager is None:
+                return None
+            return self.auth_manager.get_valid_token()
+        except Exception:
+            return None
     
     def is_authenticated(self) -> bool:
         """Check if user is authenticated"""
-        return self.auth_manager.get_valid_token() is not None
+        try:
+            if self._auth_manager is None:
+                return False
+            return self.auth_manager.get_valid_token() is not None
+        except Exception:
+            return False
 
 ArtisanPlugin = PluginBase

@@ -92,8 +92,27 @@ class PluginManager(QObject):
         self.operation_times: Dict[str, List[float]] = {}
         
         logger.info("Plugin manager initialized")
-        self._setup_health_monitoring()
-        self._setup_worker_thread()
+        # Delay setup until QApplication is ready
+        self._setup_health_monitoring_delayed()
+        self._setup_worker_thread_delayed()
+    
+    def _setup_worker_thread_delayed(self) -> None:
+        """Setup worker thread after QApplication is ready"""
+        def delayed_setup():
+            try:
+                from PyQt6.QtWidgets import QApplication
+                app = QApplication.instance()
+                if app is None:
+                    logger.warning("QApplication not ready, retrying worker thread setup")
+                    QTimer.singleShot(1000, delayed_setup)
+                    return
+                
+                self._setup_worker_thread()
+            except Exception as e:
+                logger.warning(f"Could not setup worker thread: {e}")
+                QTimer.singleShot(1000, delayed_setup)
+        
+        QTimer.singleShot(2000, delayed_setup)
     
     def _setup_worker_thread(self) -> None:
         """Setup worker thread for plugin operations"""
@@ -113,6 +132,30 @@ class PluginManager(QObject):
         
         logger.debug("Plugin manager worker thread started")
     
+    def _setup_health_monitoring_delayed(self) -> None:
+        """Setup health monitoring after QApplication is ready"""
+        def delayed_setup():
+            try:
+                from PyQt6.QtWidgets import QApplication
+                app = QApplication.instance()
+                if app is None:
+                    logger.warning("QApplication not ready, retrying health monitoring setup")
+                    QTimer.singleShot(1000, delayed_setup)
+                    return
+                
+                self._setup_health_monitoring()
+            except Exception as e:
+                logger.warning(f"Could not setup health monitoring: {e}")
+                QTimer.singleShot(1000, delayed_setup)
+        
+        QTimer.singleShot(2000, delayed_setup)
+    
+    def _setup_health_monitoring(self) -> None:
+        """Setup periodic health monitoring"""
+        self.health_check_timer = QTimer()
+        self.health_check_timer.timeout.connect(self._health_check)
+        self.health_check_timer.start(30000)  # 30 seconds
+
     def _on_plugin_operation_started(self, plugin_name: str, operation_name: str) -> None:
         """Handle plugin operation started"""
         logger.debug(f"Plugin operation started: {plugin_name} - {operation_name}")
@@ -222,12 +265,14 @@ class PluginManager(QObject):
         except Exception as e:
             logger.error(f"Failed to register plugin: {e}")
             return False
-    
+
     def _create_plugin_menu(self, plugin: PluginBase) -> None:
         try:
-            # Create plugin menu if it doesn't exist
-            if self.plugin_menu is None:
-                menubar = self.main_window.menuBar()
+            menubar = self.main_window.menuBar()
+            
+            if hasattr(self.main_window, 'menuPlugins') and self.main_window.menuPlugins is not None:
+                self.plugin_menu = self.main_window.menuPlugins
+            elif self.plugin_menu is None:
                 self.plugin_menu = menubar.addMenu("Plugins")
             
             # Add plugin menu items
@@ -237,7 +282,7 @@ class PluginManager(QObject):
                 
         except Exception as e:
             logger.error(f"Failed to create menu for {plugin.name}: {e}")
-    
+
     def get_plugin(self, name: str) -> Optional[PluginBase]:
         """Get a plugin by name"""
         self._mutex.lock()

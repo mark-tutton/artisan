@@ -1096,8 +1096,8 @@ class VMToolbar(NavigationToolbar): # pylint: disable=abstract-method
     def _add_auth_actions(self):
         """Add authentication actions to toolbar"""
         try:
-            from artisanlib.plugins.auth_manager import GlobalAuthManager
-            self.auth_manager = GlobalAuthManager()
+            self._auth_manager = None
+            self._auth_setup_pending = False
             
             # Auth Status Label
             self.auth_status_label = QLabel("Auth:")
@@ -1118,19 +1118,90 @@ class VMToolbar(NavigationToolbar): # pylint: disable=abstract-method
             self.auth_status_indicator.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px;")
             self.addWidget(self.auth_status_indicator)
             
-            # Connect auth manager signals
-            self.auth_manager.login_successful.connect(self._on_login_success)
-            self.auth_manager.login_failed.connect(self._on_login_failed)
-            self.auth_manager.token_expired.connect(self._on_token_expired)
+          
+            from PyQt6.QtCore import QTimer
             
-            # Initial status update
-            self._update_auth_status()
+            def delayed_auth_setup():
+                _log.debug("DEBUG [delayed_auth_setup]: CALLED")
+                try:
+                    # Check if QApplication exists and is ready
+                    from PyQt6.QtWidgets import QApplication
+                    _log.debug("DEBUG [delayed_auth_setup]: Checking QApplication.instance()")
+                    app = QApplication.instance()
+                    if app is None:
+                        _log.warning("QApplication not ready, deferring auth setup")
+                        # Retry after another second
+                        QTimer.singleShot(1000, delayed_auth_setup)
+                        return
+                    
+                    _log.debug("DEBUG [delayed_auth_setup]: Getting GlobalAuthManager")
+                    from artisanlib.plugins.auth_manager import get_auth_manager
+                    self._auth_manager = get_auth_manager()
+                    if self._auth_manager is None:
+                        _log.warning("GlobalAuthManager not available yet, will retry")
+                        QTimer.singleShot(1000, delayed_auth_setup)
+                        return
+                    self._auth_setup_pending = False  # Setup complete
+                    _log.debug("DEBUG [delayed_auth_setup]: GlobalAuthManager retrieved")
+                    
+                    # Connect auth manager signals
+                    _log.debug("DEBUG [delayed_auth_setup]: Connecting signals")
+                    self._auth_manager.login_successful.connect(self._on_login_success)
+                    self._auth_manager.login_failed.connect(self._on_login_failed)
+                    self._auth_manager.token_expired.connect(self._on_token_expired)
+                    _log.debug("DEBUG [delayed_auth_setup]: Signals connected")
+                    
+                    # Initial status update (only if widgets exist)
+                    if hasattr(self, 'auth_button') and hasattr(self, 'auth_status_indicator'):
+                        _log.debug("DEBUG [delayed_auth_setup]: Updating auth status")
+                        self._update_auth_status()
+                    _log.debug("DEBUG [delayed_auth_setup]: COMPLETED")
+                except Exception as e:
+                    self._auth_setup_pending = False  # Setup failed, allow retry
+                    _log.error(f"DEBUG [delayed_auth_setup]: CRASH: {type(e).__name__}: {e}", exc_info=True)
+                    _log.warning(f"Could not setup auth manager (QApplication may not be ready): {e}")
+
+            # Mark setup as pending
+            self._auth_setup_pending = True
+            # Delay by 1 second to ensure QApplication is ready
+            QTimer.singleShot(1000, delayed_auth_setup)
             
         except Exception as e:
             _log.error(f"Error setting up auth actions: {e}")
+    
+    @property
+    def auth_manager(self):
+        """Lazy access to auth_manager"""
+        if self._auth_manager is None:
+            # Check if setup is pending - if so, wait a bit
+            if hasattr(self, '_auth_setup_pending') and self._auth_setup_pending:
+                _log.debug("Auth manager setup pending, waiting...")
+                # Don't create it here if setup is pending - let delayed_auth_setup handle it
+                return None
+            try:
+                from artisanlib.plugins.auth_manager import get_auth_manager
+                self._auth_manager = get_auth_manager()
+                if self._auth_manager is None:
+                    _log.warning("GlobalAuthManager not available yet")
+            except Exception as e:
+                _log.error(f"Failed to get GlobalAuthManager in property: {e}", exc_info=True)
+                return None
+        return self._auth_manager
+
     def _handle_auth_action(self):
         """Handle login/logout button click"""
         try:
+            # Check if auth_manager is available
+            if self.auth_manager is None:
+                _log.warning("Auth manager not available yet")
+                from PyQt6.QtWidgets import QMessageBox
+                QMessageBox.warning(
+                    self,
+                    "Authentication Unavailable",
+                    "Authentication system is not ready yet. Please wait a moment and try again."
+                )
+                return
+            
             if self.auth_manager.is_authenticated():
                 # User is logged in, show logout option
                 from PyQt6.QtWidgets import QMessageBox
@@ -1148,24 +1219,53 @@ class VMToolbar(NavigationToolbar): # pylint: disable=abstract-method
                 # User is not logged in, show login dialog
                 self._show_login_dialog()
         except Exception as e:
-            _log.error(f"Error handling auth action: {e}")
+            _log.error(f"Error handling auth action: {e}", exc_info=True)
+            import traceback
+            _log.error(traceback.format_exc())
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self,
+                "Authentication Error",
+                f"An error occurred: {str(e)}"
+            )
     
     def _show_login_dialog(self):
         """Show the login dialog"""
         try:
             from artisanlib.plugins.auth_dialog import AuthDialog
+            from PyQt6.QtWidgets import QDialog
+            
             dialog = AuthDialog(self)
-            # Use the same auth manager instance
-            dialog.auth_manager = self.auth_manager
+            # AuthDialog has its own lazy initialization of auth_manager via property
+            # No need to assign it - it will use get_auth_manager() internally
             if dialog.exec() == QDialog.DialogCode.Accepted:
                 self._update_auth_status()
                 self.aw.sendmessage("Login successful")
         except Exception as e:
-            _log.error(f"Error showing login dialog: {e}")
-    
+            _log.error(f"Error showing login dialog: {e}", exc_info=True)
+            import traceback
+            _log.error(traceback.format_exc())
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self,
+                "Dialog Error",
+                f"Failed to open login dialog: {str(e)}"
+            )
+
     def _update_auth_status(self):
         """Update authentication status display"""
         try:
+            if not hasattr(self, 'auth_button') or not hasattr(self, 'auth_status_indicator'):
+                return
+            
+            if self.auth_manager is None:
+                # Auth manager not available yet
+                self.auth_button.setText("Login")
+                self.auth_button.setToolTip("Login to Artisan (initializing...)")
+                self.auth_status_indicator.setText("⏳")
+                self.auth_status_indicator.setToolTip("Authentication initializing...")
+                return
+
             if self.auth_manager.is_authenticated():
                 # User is logged in (OAuth or API key)
                 auth_method = self.auth_manager.auth_method
@@ -1259,19 +1359,39 @@ class VMToolbar(NavigationToolbar): # pylint: disable=abstract-method
             self.refresh_plugins_btn.clicked.connect(self._refresh_plugin_status)
             self.addWidget(self.refresh_plugins_btn)
             
-            # Initial status update
-            self._update_plugin_status()
+
             
-            # Set up timer for periodic updates
-            self.plugin_status_timer = QTimer()
-            self.plugin_status_timer.timeout.connect(self._update_plugin_status)
-            self.plugin_status_timer.start(30000)  # Update every 30 seconds
+            # Delay timer creation until QApplication is ready
+            from PyQt6.QtCore import QTimer
+            def delayed_timer_setup():
+                try:
+                    from PyQt6.QtWidgets import QApplication
+                    app = QApplication.instance()
+                    if app is None:
+                        QTimer.singleShot(1000, delayed_timer_setup)
+                        return
+                    # Check if plugin manager is initialized
+                    if not hasattr(self, 'plugin_manager') or self.plugin_manager is None:
+                        QTimer.singleShot(1000, delayed_timer_setup)
+                        return
+                    
+                    # Now create the timer and do initial update
+                    self.plugin_status_timer = QTimer()
+                    self.plugin_status_timer.timeout.connect(self._update_plugin_status)
+                    self.plugin_status_timer.start(30000)  # Update every 30 seconds
+                    
+                    # Do initial status update now that plugin manager is ready
+                    self._update_plugin_status()
+                except Exception as e:
+                    _log.error(f"Failed to setup plugin status timer: {e}")
+            
+            QTimer.singleShot(2000, delayed_timer_setup)
             
         except ImportError as e:
             _log.warning(f"Could not import plugin modules: {e}")
         except Exception as e:
             _log.error(f"Error setting up plugin status: {e}")
-    
+
     def _update_plugin_status(self):
         """Update the status of all plugins"""
         try:
@@ -1290,10 +1410,60 @@ class VMToolbar(NavigationToolbar): # pylint: disable=abstract-method
     def _update_autosave_status(self):
         """Update autosave plugin status"""
         try:
-            # First check if plugin is initialized through plugin manager
-            plugin = self.plugin_manager.get_plugin("Autosave") if hasattr(self, 'plugin_manager') else None
+            # Check if plugin manager exists and is accessible - simple check without exceptions
+            if not hasattr(self, 'plugin_manager'):
+                self.autosave_status.setText("🏦❓")
+                self.autosave_status.setToolTip("Autosave: Plugin Manager Not Available (not initialized)")
+                self.autosave_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #fff3cd; color: #856404;")
+                _log.debug("Plugin manager attribute not found in _update_autosave_status")
+                return
             
-            if plugin and plugin.is_active:
+            if self.plugin_manager is None:
+                self.autosave_status.setText("🏦❓")
+                self.autosave_status.setToolTip("Autosave: Plugin Manager Not Available (is None)")
+                self.autosave_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #fff3cd; color: #856404;")
+                _log.debug("Plugin manager is None in _update_autosave_status")
+                return
+            
+            # Try to access plugins to ensure it's fully initialized
+            if not hasattr(self.plugin_manager, 'plugins'):
+                self.autosave_status.setText("🏦❓")
+                self.autosave_status.setToolTip("Autosave: Plugin Manager Not Fully Initialized")
+                self.autosave_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #fff3cd; color: #856404;")
+                _log.debug("Plugin manager.plugins attribute not found")
+                return
+            
+            # Try to get plugin - check both "Autosave" and exact name
+            try:
+                plugin = self.plugin_manager.get_plugin("Autosave")
+                if plugin is None:
+                    # Try alternative names
+                    plugins_dict = getattr(self.plugin_manager, 'plugins', {})
+                    for plugin_name in plugins_dict.keys():
+                        if "autosave" in plugin_name.lower():
+                            plugin = self.plugin_manager.get_plugin(plugin_name)
+                            break
+            except Exception as e:
+                _log.debug(f"Error getting autosave plugin: {e}")
+                plugin = None
+            
+            # Check if plugin exists and is at least initialized (not just active)
+            if plugin is None:
+                self.autosave_status.setText("🏦❓")
+                self.autosave_status.setToolTip("Autosave: Plugin Not Found")
+                self.autosave_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #fff3cd; color: #856404;")
+                return
+            
+            # Check plugin state - allow INITIALIZING or ACTIVE
+            from .plugins.base import PluginState
+            if plugin.state not in [PluginState.ACTIVE, PluginState.INITIALIZING]:
+                self.autosave_status.setText("🏦❓")
+                self.autosave_status.setToolTip(f"Autosave: Plugin State - {plugin.state}")
+                self.autosave_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #fff3cd; color: #856404;")
+                return
+            
+            # Plugin is initialized, check health
+            try:
                 from .plugins.autosave.autosave_addons import get_health_checker
                 
                 health_checker = get_health_checker()
@@ -1310,16 +1480,19 @@ class VMToolbar(NavigationToolbar): # pylint: disable=abstract-method
                     self.autosave_status.setText("🏦❓")
                     self.autosave_status.setToolTip("Autosave: Health Checker Not Available")
                     self.autosave_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #fff3cd; color: #856404;")
-            else:
+            except Exception as e:
+                # Health checker might not be ready yet
+                _log.debug(f"Could not get health checker status: {e}")
                 self.autosave_status.setText("🏦❓")
-                self.autosave_status.setToolTip("Autosave: Plugin Not Initialized")
+                self.autosave_status.setToolTip(f"Autosave: Health Checker Error - {str(e)[:30]}")
                 self.autosave_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #fff3cd; color: #856404;")
                 
         except Exception as e:
+            _log.error(f"Error updating autosave status: {e}", exc_info=True)
             self.autosave_status.setText("🏦❓")
             self.autosave_status.setToolTip(f"Autosave: Error - {str(e)[:50]}")
             self.autosave_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #f8d7da; color: #721c24;")
-
+    
     def _update_broadcast_status(self):
         """Update live broadcast plugin status"""
         try:
@@ -1345,52 +1518,102 @@ class VMToolbar(NavigationToolbar): # pylint: disable=abstract-method
             self.broadcast_status.setToolTip(f"Live Broadcast: Error - {str(e)[:50]}")
             self.broadcast_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #f8d7da; color: #721c24;")
     
+
     def _update_inventory_status(self):
         """Update inventory fetcher plugin status"""
         try:
-            # First check if plugin is initialized through plugin manager
-            plugin = self.plugin_manager.get_plugin("Inventory Fetcher") if hasattr(self, 'plugin_manager') else None
-            
-            if plugin and plugin.is_active:
-                # Try to import and get status
-                try:
-                    from artisanlib.plugins.inventory_fetcher.get_plugin_status import get_inventory_fetcher_status
-                    status = get_inventory_fetcher_status()
-                except ImportError:
-                    status = None
-                    _log.debug("Inventory fetcher plugin not available")
-                
-                if status and status.get('plugin_loaded', False):
-                    if status.get('connected', False):
-                        # Check authentication status
-                        auth_status = status.get('auth_status', 'unknown')
-                        if auth_status in ['authenticated', 'jwt_valid', 'api_token', 'legacy_api_key']:
-                            self.inventory_status.setText("📦✅")
-                            self.inventory_status.setToolTip(f"Inventory Fetcher: Connected to {status.get('server_url', 'Unknown')} ({auth_status})")
-                            self.inventory_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #d4edda; color: #155724;")
-                        else:
-                            self.inventory_status.setText("📦⚠️")
-                            self.inventory_status.setToolTip(f"Inventory Fetcher: Connected but auth issue - {auth_status}")
-                            self.inventory_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #fff3cd; color: #856404;")
-                    else:
-                        self.inventory_status.setText("📦❌")
-                        error_msg = status.get('last_error', 'Unknown error')
-                        self.inventory_status.setToolTip(f"Inventory Fetcher: Disconnected - {error_msg}")
-                        self.inventory_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #f8d7da; color: #721c24;")
-                else:
-                    self.inventory_status.setText("📦❓")
-                    self.inventory_status.setToolTip("Inventory Fetcher: Plugin Not Loaded")
-                    self.inventory_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #fff3cd; color: #856404;")
-            else:
+            # Check if plugin manager exists and is accessible - simple check without exceptions
+            if not hasattr(self, 'plugin_manager'):
                 self.inventory_status.setText("📦❓")
-                self.inventory_status.setToolTip("Inventory Fetcher: Plugin Not Initialized")
+                self.inventory_status.setToolTip("Inventory Fetcher: Plugin Manager Not Available (not initialized)")
                 self.inventory_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #fff3cd; color: #856404;")
+                _log.debug("Plugin manager attribute not found in _update_inventory_status")
+                return
+            
+            if self.plugin_manager is None:
+                self.inventory_status.setText("📦❓")
+                self.inventory_status.setToolTip("Inventory Fetcher: Plugin Manager Not Available (is None)")
+                self.inventory_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #fff3cd; color: #856404;")
+                _log.debug("Plugin manager is None in _update_inventory_status")
+                return
+            
+            # Try to access plugins to ensure it's fully initialized
+            if not hasattr(self.plugin_manager, 'plugins'):
+                self.inventory_status.setText("📦❓")
+                self.inventory_status.setToolTip("Inventory Fetcher: Plugin Manager Not Fully Initialized")
+                self.inventory_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #fff3cd; color: #856404;")
+                _log.debug("Plugin manager.plugins attribute not found")
+                return
+            
+            # Try to get plugin - check both "Inventory Fetcher" and variations
+            try:
+                plugin = self.plugin_manager.get_plugin("Inventory Fetcher")
+                if plugin is None:
+                    # Try alternative names
+                    plugins_dict = getattr(self.plugin_manager, 'plugins', {})
+                    for plugin_name in plugins_dict.keys():
+                        if "inventory" in plugin_name.lower():
+                            plugin = self.plugin_manager.get_plugin(plugin_name)
+                            break
+            except Exception as e:
+                _log.debug(f"Error getting inventory plugin: {e}")
+                plugin = None
+            
+            # Check if plugin exists and is at least initialized
+            if plugin is None:
+                self.inventory_status.setText("📦❓")
+                self.inventory_status.setToolTip("Inventory Fetcher: Plugin Not Found")
+                self.inventory_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #fff3cd; color: #856404;")
+                return
+            
+            # Check plugin state - allow INITIALIZING or ACTIVE
+            from .plugins.base import PluginState
+            if plugin.state not in [PluginState.ACTIVE, PluginState.INITIALIZING]:
+                self.inventory_status.setText("📦❓")
+                self.inventory_status.setToolTip(f"Inventory Fetcher: Plugin State - {plugin.state}")
+                self.inventory_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #fff3cd; color: #856404;")
+                return
+            
+            # Plugin is initialized, try to get status
+            try:
+                from artisanlib.plugins.inventory_fetcher.get_plugin_status import get_inventory_fetcher_status
+                status = get_inventory_fetcher_status()
+            except ImportError:
+                status = None
+                _log.debug("Inventory fetcher status module not available")
+            except Exception as e:
+                _log.debug(f"Error getting inventory status: {e}")
+                status = None
+            
+            if status and status.get('plugin_loaded', False):
+                if status.get('connected', False):
+                    # Check authentication status
+                    auth_status = status.get('auth_status', 'unknown')
+                    if auth_status in ['authenticated', 'jwt_valid', 'api_token', 'legacy_api_key']:
+                        self.inventory_status.setText("📦✅")
+                        self.inventory_status.setToolTip(f"Inventory Fetcher: Connected to {status.get('server_url', 'Unknown')} ({auth_status})")
+                        self.inventory_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #d4edda; color: #155724;")
+                    else:
+                        self.inventory_status.setText("📦⚠️")
+                        self.inventory_status.setToolTip(f"Inventory Fetcher: Connected but auth issue - {auth_status}")
+                        self.inventory_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #fff3cd; color: #856404;")
+                else:
+                    self.inventory_status.setText("📦❌")
+                    error_msg = status.get('last_error', 'Unknown error')
+                    self.inventory_status.setToolTip(f"Inventory Fetcher: Disconnected - {error_msg}")
+                    self.inventory_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #f8d7da; color: #721c24;")
+            else:
+                # Plugin is initialized but status not available - show as initialized
+                self.inventory_status.setText("📦✅")
+                self.inventory_status.setToolTip("Inventory Fetcher: Plugin Initialized")
+                self.inventory_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #d4edda; color: #155724;")
                 
         except Exception as e:
+            _log.error(f"Error updating inventory status: {e}", exc_info=True)
             self.inventory_status.setText("📦❓")
             self.inventory_status.setToolTip(f"Inventory Fetcher: Error - {str(e)[:50]}")
             self.inventory_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #f8d7da; color: #721c24;")
-            
+    
     def _refresh_plugin_status(self):
         """Manual refresh of plugin status"""
         try:
@@ -2567,6 +2790,14 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
         # TODO: modularize main.py?
         # Initialize plugin manager
         self.plugin_manager = PluginManager(self)
+        # self.plugin_manager = None
+        
+        # Update plugin status now that plugin manager is initialized
+        if hasattr(self, '_update_plugin_status'):
+            try:
+                self._update_plugin_status()
+            except Exception as e:
+                _log.debug(f"Could not update plugin status immediately: {e}")
         
         # Initialize plugins
         self.initialize_plugins()
@@ -3426,7 +3657,7 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
             self.helpMenu.addAction(self.resetAction)
 
          # Create plugins menu in menuBar
-        self.menuPlugins = menuBar.addMenu('&' + QApplication.translate('Menu', 'Plugins'))
+        #self.menuPlugins = menuBar.addMenu('&' + QApplication.translate('Menu', 'Plugins'))
     
 
 
@@ -13514,7 +13745,13 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
     # Add support to handle saving more than 2 formats via autosave and uploading to external server
     def automaticsave(self, interactive:bool = True) -> Optional[str]:
         try:
-            print(f"AUTOSAVE DEBUG - automaticsave() called, autosavepath={getattr(self.qmc, 'autosavepath', None)}, autosaveflag={getattr(self.qmc, 'autosaveflag', None)}")
+            try:
+                from artisanlib.plugins.autosave.autosave_addons import load_config_to_qmc
+                load_config_to_qmc(self)
+            except Exception as e:
+                _log.debug(f"Could not load autosave config to qmc: {e}")
+            
+            _log.debug(f"AUTOSAVE DEBUG - automaticsave() called, autosavepath={getattr(self.qmc, 'autosavepath', None)}, autosaveflag={getattr(self.qmc, 'autosaveflag', None)}")
             if self.qmc.autosavepath and self.qmc.autosaveflag:
                 prefix = ''
                 if self.qmc.autosaveprefix != '':
@@ -13542,40 +13779,48 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
                     self.qmc.fileCleanSignal.emit()
 
 
-                    # # --- Upload main .alog file to external server if enabled ---
-                    # upload_enabled = getattr(self.qmc, 'autosave_upload_to_server', False)
-                    # server_url = getattr(self.qmc, 'autosave_server_url', '')
+                    # --- Upload main .alog file to external server if enabled ---
+                    upload_enabled = getattr(self.qmc, 'autosave_upload_to_server', False)
+                    server_url = getattr(self.qmc, 'autosave_server_url', '')
                     
-                    # if upload_enabled and server_url:
-                    #     _log.info(f"AUTOSAVE DEBUG - Attempting upload of main file: {filename_path}")
+                    if upload_enabled and server_url:
+                        _log.info(f"AUTOSAVE DEBUG - Attempting upload of main file: {filename_path}")
                         
-                    #     if os.path.exists(filename_path):
-                    #         try:
-                    #             if hasattr(self, "addserial"):
-                    #                 self.addserial(f"Uploading {filename_path} to server.")
+                        if os.path.exists(filename_path):
+                            try:
+                                if hasattr(self, "addserial"):
+                                    self.addserial(f"Uploading {filename_path} to server.")
                                     
-                    #             if hasattr(self, 'upload_to_server') and callable(self.upload_to_server):
-                    #                 _log.info(f"AUTOSAVE DEBUG - Using enhanced upload method for main file")
-                    #                 result = self.upload_to_server(filename_path, server_url, {'format': 'alog'})
-                    #                 if result:
-                    #                     if hasattr(self, "addmessage"):
-                    #                         self.addmessage(f"Uploaded {filename_path} to server.")
-                    #                     _log.info(f"AUTOSAVE DEBUG - Main file upload successful: {filename_path}")
-                    #                 else:
-                    #                     if hasattr(self, "addmessage"):
-                    #                         self.addmessage(f"Upload failed: {filename_path}")
-                    #                     _log.error(f"AUTOSAVE DEBUG - Main file upload failed: {filename_path}")
-                    #             else:
-                    #                 _log.warning(f"AUTOSAVE DEBUG - Enhanced upload method not available for main file")
-                    #         except Exception as e:
-                    #             if hasattr(self, "addserial"):
-                    #                 self.addserial(f"Failed to upload {filename_path}: {e}")
-                    #             if hasattr(self, "addmessage"):
-                    #                 self.addmessage(f"Failed to upload {filename_path}: {e}")
-                    #             _log.error(f"AUTOSAVE DEBUG - Main file upload error: {e}")
-                    #     else:
-                    #         _log.warning(f"AUTOSAVE DEBUG - Main file does not exist: {filename_path}")
-                    # # --- END main file upload ---
+                                # if hasattr(self, 'upload_to_server') and callable(self.upload_to_server):
+                                #     _log.info(f"AUTOSAVE DEBUG - Using enhanced upload method for main file")
+                                #     #result = self.upload_to_server(filename_path, server_url, {'format': 'alog'})
+                                #     if result:
+                                #         if hasattr(self, "addmessage"):
+                                #             self.addmessage(f"Uploaded {filename_path} to server.")
+                                #         _log.info(f"AUTOSAVE DEBUG - Main file upload successful: {filename_path}")
+                                #     else:
+                                #         if hasattr(self, "addmessage"):
+                                #             self.addmessage(f"Upload failed: {filename_path}")
+                                #         _log.error(f"AUTOSAVE DEBUG - Main file upload failed: {filename_path}")
+                                
+                                if hasattr(self, 'upload_to_server') and callable(self.upload_to_server):
+                                    _log.info(f"AUTOSAVE DEBUG - Using enhanced upload method for main file")
+                                    # Upload runs in background - don't wait for result
+                                    self.upload_to_server(filename_path, server_url, {'format': 'alog'})
+                                    _log.info(f"AUTOSAVE DEBUG - Upload started in background: {filename_path}")
+                                    # UI will be updated by the background thread
+
+                                else:
+                                    _log.warning(f"AUTOSAVE DEBUG - Enhanced upload method not available for main file")
+                            except Exception as e:
+                                if hasattr(self, "addserial"):
+                                    self.addserial(f"Failed to upload {filename_path}: {e}")
+                                if hasattr(self, "addmessage"):
+                                    self.addmessage(f"Failed to upload {filename_path}: {e}")
+                                _log.error(f"AUTOSAVE DEBUG - Main file upload error: {e}")
+                        else:
+                            _log.warning(f"AUTOSAVE DEBUG - Main file does not exist: {filename_path}")
+                    # --- END main file upload ---
 
 
                     # --- Save all enabled extra formats ---
@@ -13587,11 +13832,11 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
                     orig_fmt = self.qmc.autosaveimageformat
 
                     # DEBUG: Log autosave settings
-                    print(f"AUTOSAVE DEBUG - Starting autosave process")
-                    print(f"AUTOSAVE DEBUG - Upload to server enabled: {getattr(self.qmc, 'autosave_upload_to_server', False)}")
-                    print(f"AUTOSAVE DEBUG - Server URL: {getattr(self.qmc, 'autosave_server_url', 'Not set')}")
-                    print(f"AUTOSAVE DEBUG - Auth type: {getattr(self.qmc, 'autosave_auth_type', 'Not set')}")
-                    print(f"AUTOSAVE DEBUG - Extra formats: {len([x for x in extra_autosaves if x[0]])}")
+                    _log.debug(f"AUTOSAVE DEBUG - Starting autosave process")
+                    _log.debug(f"AUTOSAVE DEBUG - Upload to server enabled: {getattr(self.qmc, 'autosave_upload_to_server', False)}")
+                    _log.debug(f"AUTOSAVE DEBUG - Server URL: {getattr(self.qmc, 'autosave_server_url', 'Not set')}")
+                    _log.debug(f"AUTOSAVE DEBUG - Auth type: {getattr(self.qmc, 'autosave_auth_type', 'Not set')}")
+                    _log.debug(f"AUTOSAVE DEBUG - Extra formats: {len([x for x in extra_autosaves if x[0]])}")
                     
 
 
@@ -13624,31 +13869,37 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
                             upload_enabled = getattr(self.qmc, 'autosave_upload_to_server', False)
                             server_url = getattr(self.qmc, 'autosave_server_url', '')
                             
-                            print(f"AUTOSAVE DEBUG - Upload check: enabled={upload_enabled}, server_url='{server_url}'")
+                            _log.debug(f"AUTOSAVE DEBUG - Upload check: enabled={upload_enabled}, server_url='{server_url}'")
                             
                             if upload_enabled and server_url:
-                                print(f"AUTOSAVE DEBUG - Attempting upload of {save_path}")
+                                _log.debug(f"AUTOSAVE DEBUG - Attempting upload of {save_path}")
                                 
                                 # Check if file exists before uploading
                                 if not os.path.exists(save_path):
-                                    print(f"AUTOSAVE DEBUG - File does not exist: {save_path}")
+                                    _log.debug(f"AUTOSAVE DEBUG - File does not exist: {save_path}")
                                     continue
                                     
                                 try:
                                     if hasattr(self, "addserial"):
                                         self.addserial(f"Uploading {save_path} to server.")
                                         
+                                    # if hasattr(self, 'upload_to_server') and callable(self.upload_to_server):
+                                    #     _log.debug(f"AUTOSAVE DEBUG - Using enhanced upload method")
+                                    #     result = self.upload_to_server(save_path, server_url, {'format': fmt})
+                                    #     if result:
+                                    #         if hasattr(self, "addmessage"):
+                                    #             self.addmessage(f"Uploaded {save_path} to server.")
+                                    #         _log.info(f"AUTOSAVE DEBUG - Upload successful: {save_path}")
+                                    #     else:
+                                    #         if hasattr(self, "addmessage"):
+                                    #             self.addmessage(f"Upload failed: {save_path}")
+                                    #         _log.error(f"AUTOSAVE DEBUG - Upload failed: {save_path}")
                                     if hasattr(self, 'upload_to_server') and callable(self.upload_to_server):
-                                        print(f"AUTOSAVE DEBUG - Using enhanced upload method")
-                                        result = self.upload_to_server(save_path, server_url, {'format': fmt})
-                                        if result:
-                                            if hasattr(self, "addmessage"):
-                                                self.addmessage(f"Uploaded {save_path} to server.")
-                                            _log.info(f"AUTOSAVE DEBUG - Upload successful: {save_path}")
-                                        else:
-                                            if hasattr(self, "addmessage"):
-                                                self.addmessage(f"Upload failed: {save_path}")
-                                            _log.error(f"AUTOSAVE DEBUG - Upload failed: {save_path}")
+                                        _log.debug(f"AUTOSAVE DEBUG - Using enhanced upload method")
+                                        # Upload runs in background - don't wait for result
+                                        self.upload_to_server(save_path, server_url, {'format': fmt})
+                                        _log.info(f"AUTOSAVE DEBUG - Upload started in background: {save_path}")
+                                        # UI will be updated by the background thread
                                     else:
                                         _log.warning(f"AUTOSAVE DEBUG - Enhanced upload method not available, using basic upload")
                                         # Fallback to basic upload
@@ -28301,29 +28552,47 @@ def initialize_locale(my_app:Artisan) -> str:
         # Don't return - let startup continue
 
 def main() -> None:
-
-
+    print("DEBUG [main.main]: === START ===", file=sys.stderr, flush=True)
+    
     # suppress all Qt messages
+    print("DEBUG [main.main]: About to install Qt message handler", file=sys.stderr, flush=True)
     qInstallMessageHandler(qt_message_handler)
+    print("DEBUG [main.main]: Qt message handler installed", file=sys.stderr, flush=True)
 
     # suppress all warnings
     warnings.filterwarnings('ignore')
+    print("DEBUG [main.main]: Warnings suppressed", file=sys.stderr, flush=True)
+
 
     artisanviewerFirstStart:bool = False
 
     if app.artisanviewerMode:
+        print("DEBUG [main.main]: Artisan viewer mode detected", file=sys.stderr, flush=True)
         app.setApplicationName(application_viewer_name)     #needed by QSettings() to store windows geometry in operating system
         viewersettings = QSettings()
         if not viewersettings.contains('Mode'):
             artisanviewerFirstStart = True
         del viewersettings
 
+    print("DEBUG [main.main]: About to initialize locale", file=sys.stderr, flush=True)
     locale_str = initialize_locale(app)
     _log.info('locale: %s',locale_str)
+    print(f"DEBUG [main.main]: Locale initialized: {locale_str}", file=sys.stderr, flush=True)
 
-    appWindow = ApplicationWindow(locale=locale_str, WebEngineSupport=QtWebEngineSupport, artisanviewerFirstStart=artisanviewerFirstStart)
+    print("DEBUG [main.main]: About to create ApplicationWindow", file=sys.stderr, flush=True)
+    try:
+        appWindow = ApplicationWindow(locale=locale_str, WebEngineSupport=QtWebEngineSupport, artisanviewerFirstStart=artisanviewerFirstStart)
+        print("DEBUG [main.main]: ApplicationWindow created successfully", file=sys.stderr, flush=True)
+    except Exception as e:
+        print(f"DEBUG [main.main]: CRASH creating ApplicationWindow: {e}", file=sys.stderr, flush=True)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        sys.stderr.flush()
+        raise
 
+    print("DEBUG [main.main]: About to set activation window", file=sys.stderr, flush=True)
     app.setActivationWindow(appWindow,activateOnMessage=False) # set the activation window for the QtSingleApplication
+    print("DEBUG [main.main]: Activation window set", file=sys.stderr, flush=True)
 
 
     # only here deactivating the app napping seems to have an effect
@@ -28336,7 +28605,8 @@ def main() -> None:
     else:
         QApplication.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
 
-
+    print("DEBUG [main.main]: About to load settings", file=sys.stderr, flush=True)
+    
     start_time = libtime.process_time() # begin of settings load
     # fill self.defaultSettings with default app QSettings values before loading app settings from system via settingsLoad()
     appWindow.saveAllSettings(QSettings(), appWindow.defaultSettings, read_defaults=True) # don't save any settings, but just read in the defaults
@@ -28345,12 +28615,19 @@ def main() -> None:
     appWindow.settingsLoad(redraw=False) # redraw is triggered later in the startup process again
     appWindow.restoreExtraDeviceSettingsBackup() # load settings backup if it exists (like on RESET)
     _log.info('loaded %s settings in %.2fs', len(QSettings().allKeys()), libtime.process_time() - start_time)
+    print("DEBUG [main.main]: Settings loaded", file=sys.stderr, flush=True)
+
 
     # inform the user the debug logging is on
     if debugLogLevelActive():
         appWindow.sendmessage(QApplication.translate('Message', 'debug logging ON'))
 
+    print("DEBUG [main.main]: About to show window", file=sys.stderr, flush=True)
     appWindow.show()
+    print("DEBUG [main.main]: Window shown", file=sys.stderr, flush=True)
+
+    print("DEBUG [main.main]: About to process command line arguments", file=sys.stderr, flush=True)
+    
 
     try:
         if sys.argv and len(sys.argv) > 1:
@@ -28512,6 +28789,7 @@ def main() -> None:
 
 
     QTimer.singleShot(700, appWindow.qmc.startPhidgetManager)
+    print("DEBUG [main.main]: About to start Phidget manager", file=sys.stderr, flush=True)
 #    QTimer.singleShot(1, appWindow.fileQuit) # uncomment to measure startup/quit turnaround times
 
     #the following line is to trap numpy warnings that occur in the Cup Profile dialog if all values are set to 0

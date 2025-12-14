@@ -90,7 +90,6 @@ class InventoryFetcher:
                 _log.info(f"Fetching beans from: {url} (limit: {limit}, offset: {offset})")
                 _log.debug(f"Fetching from gateway: {self.config.gateway_url}")
 
-                # Get auth headers from the plugin
                 headers = self._get_auth_headers()
                 
                 _log.info("=== INVENTORY FETCHER REQUEST DEBUG ===")

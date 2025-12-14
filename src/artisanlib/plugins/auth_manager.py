@@ -11,6 +11,9 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 import json
 import urllib.parse
 from pathlib import Path
+import sys
+
+
 
 _log = logging.getLogger(__name__)
 
@@ -132,26 +135,44 @@ class GlobalAuthManager(QObject):
     login_successful = pyqtSignal(str, str)  # access_token, refresh_token
     login_failed = pyqtSignal(str)  # error message
     api_key_validated = pyqtSignal(str)  # api_key
-
-    _instance = None
-    
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super(GlobalAuthManager, cls).__new__(cls)
-        return cls._instance
     
     def __init__(self):
         super().__init__()
-        if hasattr(self, '_initialized'):
+        
+        _log.info("DEBUG: GlobalAuthManager.__init__ called")
+        
+        # prevent re-initialization of instance variables if already initialized
+        if getattr(self, '_initialized', False):
+            _log.info("DEBUG: GlobalAuthManager already initialized, skipping instance variable setup")
             return
+        
+        # Initialize instance variables
+        try:
+            self.current_token: Optional[TokenInfo] = None
+            self.api_key: Optional[str] = None
+            self.auth_method: str = "none"
+            
+            self.auth_base_url = self._load_auth_config()
+            self._load_stored_tokens()
+            self._load_stored_api_key()
+            
+            _log.info("DEBUG: GlobalAuthManager instance variables initialized successfully")
+        except Exception as e:
+            _log.error(f"DEBUG: Error initializing instance variables: {e}", exc_info=True)
+            import traceback
+            _log.error(traceback.format_exc())
+            # Continue - set defaults even if loading fails
+            if not hasattr(self, 'current_token'):
+                self.current_token = None
+            if not hasattr(self, 'api_key'):
+                self.api_key = None
+            if not hasattr(self, 'auth_method'):
+                self.auth_method = "none"
+            if not hasattr(self, 'auth_base_url'):
+                self.auth_base_url = None
+        
         self._initialized = True
-        self.current_token: Optional[TokenInfo] = None
-        self.api_key: Optional[str] = None
-        self.auth_method: str = "none"  # "oauth", "api_key", or "none"
-
-        self.auth_base_url = self._load_auth_config()
-        self._load_stored_tokens()
-        self._load_stored_api_key()
+        _log.info("DEBUG: GlobalAuthManager marked as initialized")
 
 
     def _load_auth_config(self) -> str:
@@ -209,7 +230,8 @@ class GlobalAuthManager(QObject):
         """Authenticate using an API key"""
         try:
             if not api_key or not api_key.startswith('ccr_'):
-                self.login_failed.emit("Invalid API key format. API keys must start with 'ccr_'")
+                error_msg = "Invalid API key format. API keys must start with 'ccr_'"
+                self._safe_emit(self.login_failed, error_msg)
                 return False
             
             # Get gateway base URL (remove /auth suffix if present)
@@ -230,29 +252,29 @@ class GlobalAuthManager(QObject):
                     self.api_key = api_key
                     self.auth_method = "api_key"
                     self._save_api_key()
-                    self.api_key_validated.emit(api_key)
-                    self.login_successful.emit(api_key, "")  # Empty refresh token for API keys
+                    self._safe_emit(self.api_key_validated, api_key)
+                    self._safe_emit(self.login_successful, api_key, "")
                     _log.info("API key authentication successful")
                     return True
                 else:
                     error_msg = data.get('error', 'API key validation failed')
-                    self.login_failed.emit(error_msg)
+                    self._safe_emit(self.login_failed, error_msg)
                     return False
             else:
                 error_data = response.json() if response.content else {}
                 error_msg = error_data.get('error', f'HTTP {response.status_code}')
-                self.login_failed.emit(error_msg)
+                self._safe_emit(self.login_failed, error_msg)
                 return False
                 
         except requests.exceptions.RequestException as e:
             _log.error(f"API key authentication error: {e}")
-            self.login_failed.emit(f"Network error: {str(e)}")
+            self._safe_emit(self.login_failed, f"Network error: {str(e)}")
             return False
         except Exception as e:
-            _log.error(f"API key authentication error: {e}")
-            self.login_failed.emit(f"Authentication error: {str(e)}")
+            _log.error(f"API key authentication error: {e}", exc_info=True)
+            self._safe_emit(self.login_failed, f"Authentication error: {str(e)}")
             return False
-
+    
     def login_with_google(self) -> bool:
         """Perform Google OAuth login"""
         try:
@@ -280,29 +302,30 @@ class GlobalAuthManager(QObject):
             server.shutdown()
             
             if server.tokens:
-                access_token = server.tokens['accessToken']
-                refresh_token = server.tokens['refreshToken']
+                access_token = server.tokens.get('accessToken')
+                refresh_token = server.tokens.get('refreshToken')
+                
+                if not access_token or not refresh_token:
+                    self._safe_emit(self.login_failed, "Invalid token response from server")
+                    return False
 
-                 # Get actual expiration from server response
+                # Get actual expiration from server response
                 expires_in = server.tokens.get('expiresIn', 3600)  # Default 1 hour if not provided
                 
-                # expires_in = 3600  # Default 1 hour
-                
                 self._set_tokens(access_token, refresh_token, expires_in)
-                self.login_successful.emit(access_token, refresh_token)
+                self._safe_emit(self.login_successful, access_token, refresh_token)
                 return True
             else:
-                self.login_failed.emit("OAuth timeout or failed")
+                self._safe_emit(self.login_failed, "OAuth timeout or failed")
                 return False
                 
         except Exception as e:
-            _log.error(f"Google OAuth error: {e}")
-            self.login_failed.emit(str(e))
+            _log.error(f"Google OAuth error: {e}", exc_info=True)
+            self._safe_emit(self.login_failed, str(e))
             return False
-
+    
     def refresh_token(self) -> bool:
         """Refresh the JWT token"""
-
         if self.auth_method != "oauth":
             return False
 
@@ -322,14 +345,32 @@ class GlobalAuthManager(QObject):
                 refresh_token = data.get('refreshToken', self.current_token.refresh_token)
                 expires_in = data.get('expiresIn', 3600)
                 
+                if not access_token:
+                    _log.error("No access token in refresh response")
+                    return False
+                
                 self._set_tokens(access_token, refresh_token, expires_in)
-                self.token_refreshed.emit(access_token, refresh_token)
+                
+                # Safely emit signal - check if QApplication is ready
+                try:
+                    from PyQt6.QtWidgets import QApplication
+                    app = QApplication.instance()
+                    if app is not None:
+                        self.token_refreshed.emit(access_token, refresh_token)
+                    else:
+                        _log.warning("QApplication not ready, skipping signal emission")
+                except Exception as e:
+                    _log.warning(f"Could not emit token_refreshed signal: {e}")
+                
                 return True
+            else:
+                _log.error(f"Token refresh failed with status {response.status_code}")
                 
         except Exception as e:
-            _log.error(f"Token refresh error: {e}")
+            _log.error(f"Token refresh error: {e}", exc_info=True)
             
         return False
+
     
     def get_valid_token(self) -> Optional[str]:
         """Get a valid access token or API key, refreshing if necessary"""
@@ -405,13 +446,30 @@ class GlobalAuthManager(QObject):
             if token_path.exists():
                 with open(token_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
+                
+                # Validate data structure
+                if not isinstance(data, dict):
+                    _log.warning("Invalid token data format")
+                    return
                     
                 # Check if tokens are still valid
                 expires_at = data.get('expires_at', 0)
+                if not isinstance(expires_at, (int, float)):
+                    _log.warning("Invalid expires_at value in token data")
+                    return
+                
                 if expires_at > time.time():
+                    # Validate required fields
+                    access_token = data.get('access_token')
+                    refresh_token = data.get('refresh_token')
+                    
+                    if not access_token or not refresh_token:
+                        _log.warning("Missing required token fields")
+                        return
+                    
                     self.current_token = TokenInfo(
-                        access_token=data['access_token'],
-                        refresh_token=data['refresh_token'],
+                        access_token=access_token,
+                        refresh_token=refresh_token,
                         expires_at=expires_at,
                         token_type=data.get('token_type', 'Bearer')
                     )
@@ -419,19 +477,33 @@ class GlobalAuthManager(QObject):
                     _log.info("Loaded valid tokens from storage")
                 else:
                     _log.info("Stored tokens have expired")
-                    # Try to refresh if there is a refresh token
+                    # Don't try to refresh during initialization - defer it
+                    # Refresh will happen when token is actually needed
                     if data.get('refresh_token'):
-                        _log.info("Attempting to refresh expired tokens")
-                        if self.refresh_token():
-                            _log.info("Successfully refreshed tokens")
-                        else:
-                            _log.warning("Failed to refresh tokens")
-                            self.clear_tokens()
+                        _log.info("Tokens expired, will refresh when needed")
+                        # Store refresh token for later use
+                        self.current_token = TokenInfo(
+                            access_token="",  # Will be refreshed
+                            refresh_token=data.get('refresh_token'),
+                            expires_at=0,
+                            token_type='Bearer'
+                        )
+                        self.auth_method = "oauth"
             else:
                 _log.debug("No stored tokens found")
+        except json.JSONDecodeError as e:
+            _log.error(f"Failed to parse token file (corrupted): {e}")
+            # Try to backup corrupted file
+            try:
+                backup_path = token_path.with_suffix('.json.bak')
+                token_path.rename(backup_path)
+                _log.info(f"Backed up corrupted token file to {backup_path}")
+            except:
+                pass
         except Exception as e:
-            _log.error(f"Failed to load stored tokens: {e}")
-            self.clear_tokens()
+            _log.error(f"Failed to load stored tokens: {e}", exc_info=True)
+            # Don't clear tokens on error - might be a temporary issue
+
 
     def _load_stored_api_key(self):
         """Load API key from persistent storage"""
@@ -508,21 +580,109 @@ class GlobalAuthManager(QObject):
         except Exception as e:
             _log.error(f"Failed to clear stored credentials: {e}")
     
+    def _safe_emit(self, signal, *args):
+        """Safely emit a signal, checking if QApplication is ready"""
+        try:
+            from PyQt6.QtWidgets import QApplication
+            app = QApplication.instance()
+            if app is not None:
+                signal.emit(*args)
+            else:
+                _log.warning(f"QApplication not ready, skipping signal emission: {signal}")
+        except Exception as e:
+            _log.warning(f"Could not emit signal {signal}: {e}")
+
     def get_token_info(self) -> Optional[Dict[str, Any]]:
         """Get current token information for debugging"""
-        if self.auth_method == "api_key" and self.api_key:
-            return {
-                'api_key': self.api_key[:12] + '...' if len(self.api_key) > 12 else self.api_key,
-                'auth_method': 'api_key',
-                'is_expired': False
-            }
-        elif self.auth_method == "oauth" and self.current_token:
-            return {
-                'access_token': self.current_token.access_token[:20] + '...',
-                'refresh_token': self.current_token.refresh_token[:20] + '...',
-                'expires_at': self.current_token.expires_at,
-                'expires_in': max(0, self.current_token.expires_at - int(time.time())),
-                'is_expired': self.is_token_expired(),
-                'auth_method': 'oauth'
-            }
+        try:
+            if self.auth_method == "api_key" and self.api_key:
+                return {
+                    'api_key': self.api_key[:12] + '...' if len(self.api_key) > 12 else self.api_key,
+                    'auth_method': 'api_key',
+                    'is_expired': False
+                }
+            elif self.auth_method == "oauth" and self.current_token:
+                expires_in = max(0, self.current_token.expires_at - int(time.time())) if self.current_token.expires_at > 0 else 0
+                return {
+                    'access_token': (self.current_token.access_token[:20] + '...') if self.current_token.access_token else 'N/A',
+                    'refresh_token': (self.current_token.refresh_token[:20] + '...') if self.current_token.refresh_token else 'N/A',
+                    'expires_at': self.current_token.expires_at,
+                    'expires_in': expires_in,
+                    'is_expired': self.is_token_expired(),
+                    'auth_method': 'oauth'
+                }
+        except Exception as e:
+            _log.error(f"Error getting token info: {e}", exc_info=True)
+        return None
+
+
+_auth_manager_instance: Optional[GlobalAuthManager] = None
+
+def get_auth_manager() -> Optional[GlobalAuthManager]:
+    """
+    Factory function to get or create the GlobalAuthManager singleton.
+    Ensures QApplication is ready before creating the QObject.
+    """
+    global _auth_manager_instance
+    
+    if _auth_manager_instance is not None:
+        return _auth_manager_instance
+    
+    # Check if QApplication is ready
+    try:
+        try:
+            from PyQt6.QtWidgets import QApplication
+            app = QApplication.instance()
+        except ImportError:
+            try:
+                from PyQt5.QtWidgets import QApplication  # type: ignore
+                app = QApplication.instance()
+            except ImportError:
+                _log.error("Neither PyQt6 nor PyQt5 available - cannot create GlobalAuthManager")
+                return None
+        
+        if app is None:
+            _log.warning("QApplication.instance() is None - QApplication not ready yet")
+            try:
+                from PyQt6.QtCore import QTimer
+                def delayed_create():
+                    global _auth_manager_instance
+                    if _auth_manager_instance is None:
+                        try:
+                            _auth_manager_instance = GlobalAuthManager()
+                            _log.info("GlobalAuthManager created (delayed)")
+                        except Exception as e:
+                            _log.error(f"Failed to create GlobalAuthManager (delayed): {e}", exc_info=True)
+                QTimer.singleShot(100, delayed_create)
+                return None
+            except ImportError:
+                try:
+                    from PyQt5.QtCore import QTimer  # type: ignore
+                    def delayed_create():
+                        global _auth_manager_instance
+                        if _auth_manager_instance is None:
+                            try:
+                                _auth_manager_instance = GlobalAuthManager()
+                                _log.info("GlobalAuthManager created (delayed)")
+                            except Exception as e:
+                                _log.error(f"Failed to create GlobalAuthManager (delayed): {e}", exc_info=True)
+                    QTimer.singleShot(100, delayed_create)
+                    return None
+                except ImportError:
+                    pass
+            return None
+    
+    except Exception as e:
+        _log.error(f"Error checking QApplication: {e}", exc_info=True)
+        return None
+    
+    # QApplication is ready, create the instance
+    try:
+        _auth_manager_instance = GlobalAuthManager()
+        _log.info("GlobalAuthManager created successfully")
+        return _auth_manager_instance
+    except Exception as e:
+        _log.error(f"Failed to create GlobalAuthManager: {e}", exc_info=True)
+        import traceback
+        _log.error(traceback.format_exc())
         return None

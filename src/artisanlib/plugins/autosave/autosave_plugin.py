@@ -33,11 +33,41 @@ class AutosavePlugin(PluginBase):
         config = get_config()
         health_checker = get_health_checker()
         
-        health_checker.start()
+        # DO NOT start health checker immediately - delay until QApplication is fully ready
+        # The timer will try to access auth_manager which requires QApplication to be ready
         
-        # Trigger initial health check after a short delay
+        # Trigger delayed initialization after QApplication event loop is running
         from PyQt6.QtCore import QTimer
-        QTimer.singleShot(1000, health_checker._check_server_health)
+
+        def delayed_start():
+            """Start health checker after QApplication is ready"""
+            self.logger.info("DEBUG: delayed_start() called")
+            try:
+                # Check if QApplication is ready
+                from PyQt6.QtWidgets import QApplication
+                self.logger.info("DEBUG: Checking QApplication.instance()")
+                app = QApplication.instance()
+                if app is None:
+                    self.logger.warning("QApplication not ready, deferring health checker start")
+                    # Retry after another second
+                    QTimer.singleShot(1000, delayed_start)
+                    return
+                
+                self.logger.info("DEBUG: QApplication is ready, starting health checker")
+                health_checker.start()
+                self.logger.info("DEBUG: Health checker started")
+                
+                # Also trigger initial health check (but it will be safe now)
+                self.logger.info("DEBUG: About to call _check_server_health")
+                health_checker._check_server_health()
+                self.logger.info("DEBUG: _check_server_health completed")
+            except Exception as e:
+                self.logger.error(f"DEBUG: CRASH in delayed_start: {e}")
+                import traceback
+                self.logger.error(traceback.format_exc())
+
+        # Use a longer delay (3 seconds) to ensure QApplication event loop is fully running
+        QTimer.singleShot(3000, delayed_start)
 
         # Set qmc.autosave_upload_to_server, qmc.autosave_server_url
         if self.main_window:

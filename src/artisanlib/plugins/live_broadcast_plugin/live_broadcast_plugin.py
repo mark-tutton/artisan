@@ -18,11 +18,10 @@ except ImportError:
     from PyQt5.QtWidgets import QMenu, QMainWindow, QMessageBox, QDialog, QAction
     from PyQt5.QtCore import QTimer, pyqtSignal, QObject
 
-# Import PluginBase and PluginState and LiveBroadcastConfig
 from ..base import PluginBase, PluginState
 from .config import LiveBroadcastConfig
 
-# Import SocketIOBroadcaster and SOCKETIO_AVAILABLE
+
 try:
     from .websocket_client import SocketIOBroadcaster, SOCKETIO_AVAILABLE
 except ImportError:
@@ -2114,14 +2113,29 @@ class LiveBroadcastPlugin(PluginBase):
             return
 
         try:
+            self.logger.info("DEBUG: About to import LiveBroadcastConfigDialog")
             from .config_dialog import LiveBroadcastConfigDialog
+            self.logger.info("DEBUG: LiveBroadcastConfigDialog imported successfully")
 
+            self.logger.info("DEBUG: About to create LiveBroadcastConfigDialog instance")
             dialog = LiveBroadcastConfigDialog(self.main_window, self.config)
+            self.logger.info("DEBUG: LiveBroadcastConfigDialog created successfully")
+            
+            self.logger.info("DEBUG: About to show dialog")
             if dialog.exec() == QDialog.DialogCode.Accepted:
                 self.config.save_config()
                 self.logger.info("Configuration updated and saved")
+            self.logger.info("DEBUG: Dialog closed")
         except Exception as e:
+            self.logger.error(f"CRASH in _configure: {type(e).__name__}: {e}", exc_info=True)
             self._record_error("ConfigurationError", str(e))
+            # Show error to user
+            try:
+                from PyQt6.QtWidgets import QMessageBox
+                QMessageBox.critical(self.main_window, "Configuration Error", 
+                                   f"Failed to open configuration dialog:\n{str(e)}")
+            except:
+                pass
 
     # FIXME: this does not seem to be in sync with the actual status
     def _show_status(self) -> None:

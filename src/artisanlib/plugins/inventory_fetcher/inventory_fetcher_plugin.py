@@ -47,25 +47,30 @@ class InventoryFetcherPlugin(ArtisanPlugin):
         self.fetcher = None
         self.beans_data = []
         self.roast_properties_dialog = None
-
-        # Initialize global auth manager
-        self.auth_manager = GlobalAuthManager()
-        
         
         # Threading state
         self._fetch_in_progress = False
         self._last_fetch_time = 0
         self._fetch_interval = 300  # 5 minutes between fetches
         
-        # Connect auth manager signals
-        self.auth_manager.login_successful.connect(self._on_auth_success_impl)
-        self.auth_manager.token_refreshed.connect(self._on_token_refreshed_impl)
-        self.auth_manager.token_expired.connect(self._on_token_expired_impl)
-       
         
     def initialize(self, main_window) -> None:
         """Initialize the plugin"""
         super().initialize(main_window)
+        
+        # connect auth manager signals
+        try:
+            self.auth_manager.login_successful.disconnect()
+            self.auth_manager.login_failed.disconnect()
+            self.auth_manager.token_refreshed.disconnect()
+            self.auth_manager.token_expired.disconnect()
+        except (TypeError, RuntimeError):
+            # signals weren't connected yet, that's fine
+            pass
+        
+        self.auth_manager.login_successful.connect(self._on_auth_success_impl)
+        self.auth_manager.token_refreshed.connect(self._on_token_refreshed_impl)
+        self.auth_manager.token_expired.connect(self._on_token_expired_impl)
         
         # create fetcher if server URL is configured
         if self.config.get_effective_url():
@@ -503,13 +508,12 @@ class InventoryFetcherPlugin(ArtisanPlugin):
             # Schedule the failure handler in the main thread
             QTimer.singleShot(0, lambda: self._on_fetch_failed(error_message))
 
-    # Add this to the inventory fetcher plugin for debugging
     def debug_auth_status(self):
         """Debug authentication status"""
         if self.auth_manager:
-            print(f"Auth manager exists: {self.auth_manager is not None}")
-            print(f"Is authenticated: {self.auth_manager.is_authenticated()}")
-            print(f"Token info: {self.auth_manager.get_token_info()}")
-            print(f"Auth base URL: {self.auth_manager.get_auth_base_url()}")
+            self.logger.info(f"Auth manager exists: {self.auth_manager is not None}")
+            self.logger.info(f"Is authenticated: {self.auth_manager.is_authenticated()}")
+            self.logger.info(f"Token info: {self.auth_manager.get_token_info()}")
+            self.logger.info(f"Auth base URL: {self.auth_manager.get_auth_base_url()}")
         else:
-            print("No auth manager found")
+            self.logger.warning("No auth manager found")

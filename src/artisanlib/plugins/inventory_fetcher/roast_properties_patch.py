@@ -33,19 +33,19 @@ _log = logging.getLogger(__name__)
 def setup_inventory_integration(roast_properties_dialog, inventory_plugin):
     """Set up inventory integration for the roast properties dialog with thread safety"""
     try:
-        print("🔧 DEBUG: Starting inventory integration setup...")
+        _log.info("DEBUG: Starting inventory integration setup...")
         _log.info(" Starting inventory integration setup...")
 
         # Register the dialog with the plugin
         inventory_plugin.register_roast_properties_dialog(roast_properties_dialog)
-        print("✅ DEBUG: Dialog registered with plugin")
+        _log.info("DEBUG: Dialog registered with plugin")
 
         # Create inventory combo box
         inventory_combo = QComboBox(roast_properties_dialog)
         inventory_combo.setObjectName("inventory_combo")
         inventory_combo.addItem("Select/Search from inventory...")
         inventory_combo.setMinimumWidth(200)
-        print("✅ DEBUG: Combo box created")
+        _log.info("DEBUG: Combo box created")
 
          # Enable search 
         inventory_combo.setEditable(True)
@@ -68,7 +68,7 @@ def setup_inventory_integration(roast_properties_dialog, inventory_plugin):
         refresh_button.clicked.connect(
             lambda: refresh_inventory(roast_properties_dialog, inventory_plugin)
         )
-        print("✅ DEBUG: Refresh button created")
+        _log.info("DEBUG: Refresh button created")
 
         # Create layout for inventory controls
         inventory_layout = QHBoxLayout()
@@ -153,7 +153,7 @@ def setup_inventory_integration(roast_properties_dialog, inventory_plugin):
         _log.info("Inventory integration set up successfully")
 
     except Exception as e:
-        print(f"❌ ERROR: Failed to set up inventory integration: {e}")
+        _log.error(f"ERROR: Failed to set up inventory integration: {e}")
         _log.error(f"Error setting up inventory integration: {e}")
         import traceback
 
@@ -414,12 +414,12 @@ def debug_inventory_combo(roast_properties_dialog):
         if hasattr(roast_properties_dialog, "inventory_combo"):
             combo = roast_properties_dialog.inventory_combo
             items = [combo.itemText(i) for i in range(combo.count())]
-            print(f"Inventory combo items: {items}")
-            print(f"Current index: {combo.currentIndex()}")
-            print(f"Current text: {combo.currentText()}")
+            _log.info(f"Inventory combo items: {items}")
+            _log.info(f"Current index: {combo.currentIndex()}")
+            _log.info(f"Current text: {combo.currentText()}")
             return items
         else:
-            print("No inventory_combo found")
+            _log.info("No inventory_combo found")
             return []
     except Exception as e:
         _log.error(f"Error debugging inventory combo: {e}")

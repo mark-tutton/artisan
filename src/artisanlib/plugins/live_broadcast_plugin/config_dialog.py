@@ -62,8 +62,9 @@ class LiveBroadcastConfigDialog(QDialog):
     def __init__(self, parent, config: LiveBroadcastConfig):
         super().__init__(parent)
         self.config = config
-        self.auth_manager = GlobalAuthManager()
-    
+        
+        self._auth_manager = None
+        
         self._ensure_config_loaded()
         
         self.test_in_progress = False
@@ -75,6 +76,39 @@ class LiveBroadcastConfigDialog(QDialog):
         self.update_auth_status()
         self.load_config()
         self.setup_validation()
+    
+    @property
+    def auth_manager(self):
+        """Lazy initialization of GlobalAuthManager"""
+        if self._auth_manager is None:
+            try:
+                _log.info("DEBUG: Creating GlobalAuthManager for config dialog (lazy)")
+                from ..auth_manager import GlobalAuthManager
+                self._auth_manager = GlobalAuthManager()
+                _log.info("DEBUG: GlobalAuthManager created successfully")
+                # Connect signals now that it's created
+                self._connect_auth_signals()
+            except Exception as e:
+                _log.error(f"Failed to create GlobalAuthManager: {e}", exc_info=True)
+                import traceback
+                _log.error(traceback.format_exc())
+                return None
+        return self._auth_manager
+    
+    def _connect_auth_signals(self):
+        """Connect auth manager signals"""
+        if self._auth_manager is None:
+            return
+        try:
+            self._auth_manager.login_successful.connect(self.on_auth_success)
+            self._auth_manager.login_failed.connect(self.on_auth_failed)
+            self._auth_manager.token_refreshed.connect(self.on_token_refreshed)
+            self._auth_manager.token_expired.connect(self.on_token_expired)
+        except Exception as e:
+            _log.error(f"Failed to connect auth signals: {e}", exc_info=True)
+
+    def connect_signals(self):
+        pass
 
     def _ensure_config_loaded(self):
         """Ensure the config is loaded from the saved file"""
@@ -157,52 +191,100 @@ class LiveBroadcastConfigDialog(QDialog):
             raise
 
     def connect_signals(self):
-        # Connect to auth manager signals
-        self.auth_manager.login_successful.connect(self.on_auth_success)
-        self.auth_manager.login_failed.connect(self.on_auth_failed)
-        self.auth_manager.token_refreshed.connect(self.on_token_refreshed)
-        self.auth_manager.token_expired.connect(self.on_token_expired)
+        # Connect to auth manager signals with error handling
+        if self.auth_manager is None:
+            _log.warning("Auth manager not available, skipping signal connections")
+            return
+        
+        try:
+            _log.debug("Connecting auth manager signals")
+            self.auth_manager.login_successful.connect(self.on_auth_success)
+            self.auth_manager.login_failed.connect(self.on_auth_failed)
+            self.auth_manager.token_refreshed.connect(self.on_token_refreshed)
+            self.auth_manager.token_expired.connect(self.on_token_expired)
+            _log.debug("Auth manager signals connected successfully")
+        except Exception as e:
+            _log.error(f"Failed to connect auth manager signals: {e}", exc_info=True)
+
+
 
     def update_auth_status(self):
         """Update the authentication status display"""
-        if self.auth_manager.is_authenticated():
-            token_info = self.auth_manager.get_token_info()
-            if token_info:
-                expires_in = token_info.get('expires_in', 0)
-                self.auth_status_label.setText(f"Authenticated (expires in {expires_in}s)")
-                self.auth_status_label.setStyleSheet("color: green; font-weight: bold;")
-                self.login_button.setText("Re-login")
+        try:
+            auth_mgr = self.auth_manager
+            if auth_mgr is None:
+                _log.warning("Auth manager is None after lazy initialization attempt")
+                self.auth_status_label.setText("Authentication unavailable (initialization failed)")
+                self.auth_status_label.setStyleSheet("color: orange; font-weight: bold;")
+                self.login_button.setEnabled(False)
+                return
+            
+            if auth_mgr.is_authenticated():
+                token_info = auth_mgr.get_token_info()
+                if token_info:
+                    expires_in = token_info.get('expires_in', 0)
+                    self.auth_status_label.setText(f"Authenticated (expires in {expires_in}s)")
+                    self.auth_status_label.setStyleSheet("color: green; font-weight: bold;")
+                    self.login_button.setText("Re-login")
+                else:
+                    self.auth_status_label.setText("Authenticated")
+                    self.auth_status_label.setStyleSheet("color: green; font-weight: bold;")
+                    self.login_button.setText("Re-login")
             else:
-                self.auth_status_label.setText("Authenticated")
-                self.auth_status_label.setStyleSheet("color: green; font-weight: bold;")
-                self.login_button.setText("Re-login")
-        else:
-            self.auth_status_label.setText("Not authenticated")
-            self.auth_status_label.setStyleSheet("color: red; font-weight: bold;")
-            self.login_button.setText("Login")
+                self.auth_status_label.setText("Not authenticated")
+                self.auth_status_label.setStyleSheet("color: red; font-weight: bold;")
+                self.login_button.setText("Login")
+        except Exception as e:
+            _log.error(f"Error updating auth status: {e}", exc_info=True)
+            import traceback
+            _log.error(traceback.format_exc())
+            self.auth_status_label.setText(f"Authentication error: {str(e)[:50]}")
+            self.auth_status_label.setStyleSheet("color: orange; font-weight: bold;")
+            self.login_button.setEnabled(False)
 
     def show_login_dialog(self):
         """Show the login dialog"""
-        from ..auth_dialog import AuthDialog
-        dialog = AuthDialog(self)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            self.update_auth_status()
+        if self.auth_manager is None:
+            QMessageBox.warning(self, "Authentication Unavailable", 
+                              "Authentication is not available. Please restart the application.")
+            return
+        
+        try:
+            from ..auth_dialog import AuthDialog
+            dialog = AuthDialog(self)
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                self.update_auth_status()
+        except Exception as e:
+            _log.error(f"Error showing login dialog: {e}", exc_info=True)
+            QMessageBox.critical(self, "Error", f"Failed to show login dialog: {e}")
 
     def on_auth_success(self, access_token: str, refresh_token: str):
         """Handle successful authentication"""
-        self.update_auth_status()
+        try:
+            self.update_auth_status()
+        except Exception as e:
+            _log.error(f"Error handling auth success: {e}", exc_info=True)
 
     def on_auth_failed(self, error: str):
         """Handle authentication failure"""
-        self.update_auth_status()
+        try:
+            self.update_auth_status()
+        except Exception as e:
+            _log.error(f"Error handling auth failure: {e}", exc_info=True)
 
     def on_token_refreshed(self, access_token: str, refresh_token: str):
         """Handle token refresh"""
-        self.update_auth_status()
+        try:
+            self.update_auth_status()
+        except Exception as e:
+            _log.error(f"Error handling token refresh: {e}", exc_info=True)
 
     def on_token_expired(self):
         """Handle token expiration"""
-        self.update_auth_status()
+        try:
+            self.update_auth_status()
+        except Exception as e:
+            _log.error(f"Error handling token expiration: {e}", exc_info=True)
 
     def setup_server_tab(self):
         """Setup server configuration tab"""
@@ -316,7 +398,7 @@ class LiveBroadcastConfigDialog(QDialog):
 
             # Socket.IO availability warning
             if not SOCKETIO_AVAILABLE:
-                warning_label = QLabel("⚠️ socketio library not available")
+                warning_label = QLabel("socketio library not available")
                 warning_label.setStyleSheet("color: red; font-weight: bold;")
                 layout.addWidget(warning_label)
 

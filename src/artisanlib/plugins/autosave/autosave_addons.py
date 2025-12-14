@@ -38,6 +38,7 @@ class ServerHealthChecker(QObject):
     connection_error = pyqtSignal(str)
     token_refresh_needed = pyqtSignal()  
 
+
     def __init__(self, config: AutosaveAddonConfig):
         QObject.__init__(self)
         
@@ -46,17 +47,21 @@ class ServerHealthChecker(QObject):
         # Validate URLs
         self.config.autosave_server_url = _validate_url(self.config.autosave_server_url)
         self.config.autosave_health_url = _validate_url(self.config.autosave_health_url)
-
+        
         self.is_healthy = False
         self.last_check = 0
         self.health_timer = QTimer(self)
         self.health_timer.timeout.connect(self._check_server_health)
         
-        # Get global auth manager
-        self.auth_manager = GlobalAuthManager()
+        self._auth_manager = None
 
-        # if config.autosave_health_check_enabled:
-        #     self.health_timer.start(config.autosave_health_check_interval * 1000)
+    @property
+    def auth_manager(self):
+        """Lazy initialization of GlobalAuthManager"""
+        if self._auth_manager is None:
+            from ..auth_manager import get_auth_manager
+            self._auth_manager = get_auth_manager()
+        return self._auth_manager
 
     def start(self) -> None:
         """Start the health checker timer"""
@@ -76,9 +81,26 @@ class ServerHealthChecker(QObject):
         """Check if the server is responsive"""
         try:
             health_url = self.config.autosave_health_url
+            if not health_url:
+                _log.warning("Health URL not configured, skipping health check")
+                return
+
             _log.debug(f"Checking server health at: {health_url}")
 
-            headers = self.auth_manager.get_auth_headers()
+    
+            headers = {}
+            try:
+                if self._auth_manager is None:
+                    # Try to get auth manager
+                    auth_mgr = self.auth_manager
+                    if auth_mgr is None:
+                        _log.debug("Auth manager not available, checking server without auth")
+                    else:
+                        headers = auth_mgr.get_auth_headers()
+                else:
+                    headers = self.auth_manager.get_auth_headers()
+            except Exception as e:
+                _log.warning(f"Could not get auth headers for health check: {e}")
 
             response = requests.get(
                 health_url,
@@ -91,27 +113,37 @@ class ServerHealthChecker(QObject):
             # Handle 401 Unauthorized - token might be expired
             if response.status_code == 401:
                 _log.warning("Health check returned 401 - authentication may be expired")
-                # Only try refresh for OAuth tokens, not API keys
-                if self.auth_manager.auth_method == "oauth":
-                    if self.config.autosave_auto_refresh:
-                        _log.info("Attempting automatic token refresh...")
-                        if self.auth_manager.refresh_token():
-                            _log.info("Token refreshed, retrying health check")
-                            # Retry health check with new token
-                            headers = self.auth_manager.get_auth_headers()
-                            response = requests.get(
-                                health_url,
-                                timeout=self.config.autosave_connection_timeout,
-                                headers=headers,
-                            )
-                        else:
-                            _log.error("Token refresh failed")
-                            self.token_refresh_needed.emit()
-                            return
-                else:
-                    # API key auth - can't refresh, just report error
-                    _log.error("API key authentication failed")
+                try:
+                    if self._auth_manager and self.auth_manager.auth_method == "oauth":
+                        if self.config.autosave_auto_refresh:
+                            _log.info("Attempting automatic token refresh...")
+                            if self.auth_manager.refresh_token():
+                                _log.info("Token refreshed, retrying health check")
+                                # Retry health check with new token
+                                headers = self.auth_manager.get_auth_headers()
+                                response = requests.get(
+                                    health_url,
+                                    timeout=self.config.autosave_connection_timeout,
+                                    headers=headers,
+                                )
+                            else:
+                                _log.error("Token refresh failed")
+                                self.token_refresh_needed.emit()
+                                self.is_healthy = False
+                                self.health_status_changed.emit(False)
+                                return
+                    else:
+                        # API key auth - can't refresh, just report error
+                        _log.error("API key authentication failed")
+                        self.token_refresh_needed.emit()
+                        self.is_healthy = False
+                        self.health_status_changed.emit(False)
+                        return
+                except Exception as e:
+                    _log.warning(f"Error during token refresh: {e}")
                     self.token_refresh_needed.emit()
+                    self.is_healthy = False
+                    self.health_status_changed.emit(False)
                     return
             
             if response.status_code == 200:
@@ -122,33 +154,48 @@ class ServerHealthChecker(QObject):
                     server_status = health_data.get("status", "unknown")
 
                     if server_status == "healthy":
-                        if not self.is_healthy:
-                            self.is_healthy = True
+                        was_healthy = self.is_healthy
+                        self.is_healthy = True
+                        if not was_healthy:
                             self.health_status_changed.emit(True)
-                            _log.info("Server health check passed - server reports healthy")
+                        else:
+                            self.health_status_changed.emit(True)
+                        _log.info("Server health check passed - server reports healthy")
                     else:
-                        if self.is_healthy:
-                            self.is_healthy = False
+                        was_healthy = self.is_healthy
+                        self.is_healthy = False
+                        if was_healthy:
                             self.health_status_changed.emit(False)
-                            _log.warning(f"Server reports unhealthy status: {server_status}")
+                        else:
+                            self.health_status_changed.emit(False)
+                        _log.warning(f"Server reports unhealthy status: {server_status}")
                 except (ValueError, KeyError) as e:
                     _log.warning(f"Could not parse health response: {e}")
-                    if not self.is_healthy:
-                        self.is_healthy = True
+                    was_healthy = self.is_healthy
+                    self.is_healthy = True
+                    if not was_healthy:
                         self.health_status_changed.emit(True)
-                        _log.info("Server health check passed (status code only)")
+                    else:
+                        self.health_status_changed.emit(True)
+                    _log.info("Server health check passed (status code only)")
             else:
-                if self.is_healthy:
-                    self.is_healthy = False
+                was_healthy = self.is_healthy
+                self.is_healthy = False
+                if was_healthy:
                     self.health_status_changed.emit(False)
-                    _log.warning(f"Server health check failed: {response.status_code}")
+                else:
+                    self.health_status_changed.emit(False)
+                _log.warning(f"Server health check failed: {response.status_code}")
 
         except requests.exceptions.RequestException as e:
-            if self.is_healthy:
-                self.is_healthy = False
+            was_healthy = self.is_healthy
+            self.is_healthy = False
+            if was_healthy:
                 self.health_status_changed.emit(False)
-                self.connection_error.emit(str(e))
-                _log.error(f"Server health check error: {e}")
+            else:
+                self.health_status_changed.emit(False)
+            self.connection_error.emit(str(e))
+            _log.error(f"Server health check error: {e}")
 
         self.last_check = time.time()
 
@@ -298,7 +345,7 @@ def integrate_with_automaticsave(aw):
         _log.info(f"AUTOSAVE PLUGIN DEBUG - Upload enabled: {_config.autosave_upload_to_server}")
 
         def enhanced_upload_to_server(filepath: str, server_url: str, extra_params: dict = None):
-            """Enhanced upload method with health checking and retry logic"""
+            """Enhanced upload method with health checking and retry logic - runs in background thread"""
             _log.info(f"AUTOSAVE PLUGIN DEBUG - Enhanced upload called for: {filepath}")
             _log.info(f"AUTOSAVE PLUGIN DEBUG - Server URL: {server_url}")
             _log.info(f"AUTOSAVE PLUGIN DEBUG - Extra params: {extra_params}")
@@ -308,17 +355,42 @@ def integrate_with_automaticsave(aw):
                 _log.warning(f"AUTOSAVE PLUGIN DEBUG - Skipping upload - server is not healthy: {filepath}")
                 return None
 
-            success = health_checker.upload_file(
-                filepath, extra_params.get("format", "unknown") if extra_params else "unknown"
-            )
-
-            if success:
-                _log.info(f"AUTOSAVE PLUGIN DEBUG - File uploaded successfully via plugin: {filepath}")
-                return True
-            else:
-                _log.error(f"AUTOSAVE PLUGIN DEBUG - File upload failed via plugin: {filepath}")
-                return None
-
+            # Run upload in background thread to avoid blocking UI
+            import threading
+            
+            def do_upload():
+                """Perform upload in background thread"""
+                try:
+                    success = health_checker.upload_file(
+                        filepath, extra_params.get("format", "unknown") if extra_params else "unknown"
+                    )
+                    
+                    if success:
+                        _log.info(f"AUTOSAVE PLUGIN DEBUG - File uploaded successfully via plugin: {filepath}")
+                        from PyQt6.QtCore import QTimer
+                        def update_ui_success():
+                            if hasattr(aw, "addmessage"):
+                                aw.addmessage(f"Uploaded {filepath} to server.")
+                        QTimer.singleShot(0, update_ui_success)
+                    else:
+                        _log.error(f"AUTOSAVE PLUGIN DEBUG - File upload failed via plugin: {filepath}")
+                        from PyQt6.QtCore import QTimer
+                        def update_ui_failure():
+                            if hasattr(aw, "addmessage"):
+                                aw.addmessage(f"Upload failed: {filepath}")
+                        QTimer.singleShot(0, update_ui_failure)
+                except Exception as e:
+                    _log.error(f"AUTOSAVE PLUGIN DEBUG - Upload error: {e}", exc_info=True)
+                    from PyQt6.QtCore import QTimer
+                    def update_ui_error():
+                        if hasattr(aw, "addmessage"):
+                            aw.addmessage(f"Upload error: {e}")
+                    QTimer.singleShot(0, update_ui_error)
+            
+            thread = threading.Thread(target=do_upload, daemon=True)
+            thread.start()
+            
+            return True
         aw.upload_to_server = enhanced_upload_to_server
         _log.info("AUTOSAVE PLUGIN DEBUG - Plugin integrated with automaticsave method")
 
@@ -377,55 +449,106 @@ def create_server_upload_widgets(aw):
     
     def on_auth_button_clicked():
         """Open global authentication dialog"""
-        auth_manager = GlobalAuthManager()
-        dialog = AuthDialog()
-        if dialog.exec():
-            # Update auth status after successful authentication
-            update_auth_status()
-            _log.info("Authentication successful")
-        else:
-            update_auth_status()
-    
+        try:
+            from ..auth_manager import get_auth_manager
+            auth_manager = get_auth_manager()
+            if auth_manager is None:
+                from PyQt6.QtWidgets import QMessageBox
+                QMessageBox.warning(None, "Authentication Error", 
+                                  "Authentication system is not available. Please ensure the application is fully loaded.")
+                return
+            
+            dialog = AuthDialog()
+            if dialog.exec():
+                update_auth_status()
+                _log.info("Authentication successful")
+            else:
+                update_auth_status()
+        except Exception as e:
+            _log.error(f"Failed to get GlobalAuthManager or show auth dialog: {e}", exc_info=True)
+            import traceback
+            _log.error(traceback.format_exc())
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(None, "Authentication Error", 
+                              f"Failed to open authentication dialog: {e}")
+          
     authButton.clicked.connect(on_auth_button_clicked)
     
     def update_auth_status():
         """Update authentication status display"""
-        auth_manager = GlobalAuthManager()
-        if auth_manager.is_authenticated():
-            token_info = auth_manager.get_token_info()
-            if token_info:
-                auth_method = token_info.get('auth_method', 'unknown')
-                if auth_method == 'api_key':
-                    authStatusLabel.setText(f"✅ Authenticated (API Key)")
-                elif auth_method == 'oauth':
-                    if token_info.get('is_expired', False):
-                        authStatusLabel.setText("⚠️ Token Expired")
-                        authStatusLabel.setStyleSheet("color: orange;")
+        try: 
+            from ..auth_manager import get_auth_manager
+            auth_manager = get_auth_manager()
+            if auth_manager is None:
+                authStatusLabel.setText("❌ Authentication unavailable")
+                authStatusLabel.setStyleSheet("color: orange;")
+                return
+            
+            if auth_manager.is_authenticated():
+                token_info = auth_manager.get_token_info()
+                if token_info:
+                    auth_method = token_info.get('auth_method', 'unknown')
+                    if auth_method == 'api_key':
+                        authStatusLabel.setText(f"✅ Authenticated (API Key)")
+                    elif auth_method == 'oauth':
+                        if token_info.get('is_expired', False):
+                            authStatusLabel.setText("⚠️ Token Expired")
+                            authStatusLabel.setStyleSheet("color: orange;")
+                        else:
+                            expires_in = token_info.get('expires_in', 0)
+                            hours = expires_in // 3600
+                            minutes = (expires_in % 3600) // 60
+                            authStatusLabel.setText(f"✅ Authenticated (OAuth - expires in {hours}h {minutes}m)")
+                            authStatusLabel.setStyleSheet("color: green;")
                     else:
-                        expires_in = token_info.get('expires_in', 0)
-                        hours = expires_in // 3600
-                        minutes = (expires_in % 3600) // 60
-                        authStatusLabel.setText(f"✅ Authenticated (OAuth - expires in {hours}h {minutes}m)")
+                        authStatusLabel.setText("✅ Authenticated")
                         authStatusLabel.setStyleSheet("color: green;")
                 else:
                     authStatusLabel.setText("✅ Authenticated")
                     authStatusLabel.setStyleSheet("color: green;")
             else:
-                authStatusLabel.setText("✅ Authenticated")
-                authStatusLabel.setStyleSheet("color: green;")
-        else:
-            authStatusLabel.setText("❌ Not authenticated")
-            authStatusLabel.setStyleSheet("color: red;")
+                authStatusLabel.setText("❌ Not authenticated")
+                authStatusLabel.setStyleSheet("color: red;")
+        except Exception as e:
+            _log.error(f"Failed to update auth status: {e}", exc_info=True)
+            import traceback
+            _log.error(traceback.format_exc())
+            try:
+                authStatusLabel.setText("❌ Authentication unavailable")
+                authStatusLabel.setStyleSheet("color: orange;")
+            except:
+                pass  # Widget might not exist yet
     
-    # Update auth status on load
-    update_auth_status()
+    from PyQt6.QtCore import QTimer
+    def delayed_update_auth_status():
+        try:
+            update_auth_status()
+        except Exception as e:
+            _log.error(f"Failed to update auth status in delayed callback: {e}", exc_info=True)
     
-    # Connect to auth manager signals to update status when auth changes
-    auth_manager = GlobalAuthManager()
-    auth_manager.login_successful.connect(update_auth_status)
-    auth_manager.login_failed.connect(update_auth_status)
-    auth_manager.token_refreshed.connect(update_auth_status)
-    auth_manager.token_expired.connect(update_auth_status)
+    QTimer.singleShot(100, delayed_update_auth_status)
+    
+    def connect_auth_signals():
+        """Connect auth manager signals - called lazily when needed"""
+        try:
+            auth_manager = GlobalAuthManager()
+            auth_manager.login_successful.connect(update_auth_status)
+            auth_manager.login_failed.connect(update_auth_status)
+            auth_manager.token_refreshed.connect(update_auth_status)
+            auth_manager.token_expired.connect(update_auth_status)
+            return auth_manager
+        except Exception as e:
+            _log.warning(f"Failed to connect auth signals (QApplication may not be ready): {e}")
+            return None
+
+    _auth_manager_connector = connect_auth_signals
+    
+    try:
+        auth_manager = connect_auth_signals()
+        if auth_manager is None:
+            _log.debug("Auth signal connection deferred - will retry when dialog is shown")
+    except Exception as e:
+        _log.debug(f"Auth signal connection deferred due to: {e}")
 
     # Create connection settings
     timeoutLabel = QLabel(QApplication.translate("Label", "Connection Timeout (seconds):"))
@@ -484,44 +607,55 @@ def create_server_upload_widgets(aw):
 
     def update_token_status():
         """Update token status display"""
-        auth_manager = GlobalAuthManager()
-        token_info = auth_manager.get_token_info()
-        
-        if token_info:
-            auth_method = token_info.get('auth_method', 'unknown')
+        try: 
+            auth_manager = GlobalAuthManager()
+            token_info = auth_manager.get_token_info()
             
-            if auth_method == 'api_key':
-                tokenStatusIndicator.setText("API Key (no expiry)")
-                tokenStatusIndicator.setStyleSheet("color: green;")
-                tokenExpiryInfo.setText("N/A")
-                refreshTokenButton.setEnabled(False)  # Can't refresh API keys
-            elif auth_method == 'oauth':
-                if token_info.get('is_expired', False):
-                    tokenStatusIndicator.setText("Expired")
-                    tokenStatusIndicator.setStyleSheet("color: red;")
-                    refreshTokenButton.setEnabled(True)
-                else:
-                    tokenStatusIndicator.setText("Valid")
-                    tokenStatusIndicator.setStyleSheet("color: green;")
-                    refreshTokenButton.setEnabled(True)
+            if token_info:
+                auth_method = token_info.get('auth_method', 'unknown')
                 
-                # Show expiry time for OAuth tokens
-                expires_at = token_info.get('expires_at')
-                if expires_at:
-                    expiry_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(expires_at))
-                    tokenExpiryInfo.setText(expiry_time)
+                if auth_method == 'api_key':
+                    tokenStatusIndicator.setText("API Key (no expiry)")
+                    tokenStatusIndicator.setStyleSheet("color: green;")
+                    tokenExpiryInfo.setText("N/A")
+                    refreshTokenButton.setEnabled(False)  # Can't refresh API keys
+                elif auth_method == 'oauth':
+                    if token_info.get('is_expired', False):
+                        tokenStatusIndicator.setText("Expired")
+                        tokenStatusIndicator.setStyleSheet("color: red;")
+                        refreshTokenButton.setEnabled(True)
+                    else:
+                        tokenStatusIndicator.setText("Valid")
+                        tokenStatusIndicator.setStyleSheet("color: green;")
+                        refreshTokenButton.setEnabled(True)
+                    
+                    # Show expiry time for OAuth tokens
+                    expires_at = token_info.get('expires_at')
+                    if expires_at:
+                        expiry_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(expires_at))
+                        tokenExpiryInfo.setText(expiry_time)
+                    else:
+                        tokenExpiryInfo.setText("Unknown")
                 else:
+                    tokenStatusIndicator.setText("Unknown")
+                    tokenStatusIndicator.setStyleSheet("color: orange;")
                     tokenExpiryInfo.setText("Unknown")
+                    refreshTokenButton.setEnabled(False)
             else:
-                tokenStatusIndicator.setText("Unknown")
-                tokenStatusIndicator.setStyleSheet("color: orange;")
+                tokenStatusIndicator.setText("No token")
+                tokenStatusIndicator.setStyleSheet("color: red;")
                 tokenExpiryInfo.setText("Unknown")
                 refreshTokenButton.setEnabled(False)
-        else:
-            tokenStatusIndicator.setText("No token")
-            tokenStatusIndicator.setStyleSheet("color: red;")
-            tokenExpiryInfo.setText("Unknown")
-            refreshTokenButton.setEnabled(False)
+        except Exception as e:
+            _log.error(f"Failed to create or access GlobalAuthManager in update_token_status: {e}", exc_info=True)
+            import traceback
+            _log.error(traceback.format_exc())
+            # Set safe defaults
+            try:
+                tokenStatusIndicator.setText("❌ Unavailable")
+                tokenExpiryLabel.setText("")
+            except:
+                pass  # Widgets might not exist yet
 
     def on_refresh_token_clicked():
         """Handle manual token refresh (OAuth only)"""
@@ -565,9 +699,11 @@ def create_server_upload_widgets(aw):
         try:
             if statusIndicator and statusIndicator.parent() is not None:
                 if is_healthy:
+                    statusLabel.setText("Server Status: Connected")
                     statusIndicator.setText("✅ Connected")
                     statusIndicator.setStyleSheet("color: green; font-weight: bold;")
                 else:
+                    statusLabel.setText("Server Status: Disconnected")
                     statusIndicator.setText("❌ Disconnected")
                     statusIndicator.setStyleSheet("color: red; font-weight: bold;")
                 _log.info(f"Server status updated: {'Connected' if is_healthy else 'Disconnected'}")
@@ -579,6 +715,7 @@ def create_server_upload_widgets(aw):
     def on_connection_error(error_msg):
         try:
             if statusIndicator and statusIndicator.parent() is not None:
+                statusLabel.setText(f"Server Status: Error - {error_msg[:30]}...")
                 statusIndicator.setText(f"Error: {error_msg[:30]}...")
                 statusIndicator.setStyleSheet("color: red; font-weight: bold;")
                 _log.error(f"Connection error: {error_msg}")
@@ -586,22 +723,58 @@ def create_server_upload_widgets(aw):
                 _log.debug("Status indicator widget no longer exists, skipping error update")
         except RuntimeError as e:
             _log.debug(f"Status indicator widget was destroyed: {e}")
-
-    # Connect the signals
+    # Connect the signals (REMOVE the incorrectly placed disconnect code below)
     health_checker.health_status_changed.connect(on_health_status_changed)
     health_checker.connection_error.connect(on_connection_error)
 
-    # Trigger an immediate health check
+        # Trigger an immediate health check
     def trigger_health_check():
+        """Trigger health check in a separate thread to avoid blocking UI"""
         _log.info("🔍 Triggering immediate health check...")
-        health_checker._check_server_health()
-
+        
+        # Update UI to show checking status
+        statusLabel.setText("Checking server...")
+        statusIndicator.setText("⏳")
+        statusIndicator.setStyleSheet("color: orange;")
+        refreshButton.setEnabled(False)  # Disable button during check
+        
+        import threading
+        def do_health_check():
+            try:
+                health_checker._check_server_health()
+            except Exception as e:
+                _log.error(f"Error in health check thread: {e}", exc_info=True)
+                # Update UI from main thread
+                from PyQt6.QtCore import QTimer
+                def update_ui_error():
+                    statusLabel.setText(f"Error: {str(e)[:50]}")
+                    statusIndicator.setText("❌")
+                    statusIndicator.setStyleSheet("color: red;")
+                    refreshButton.setEnabled(True)
+                QTimer.singleShot(0, update_ui_error)
+            else:
+                # Re-enable button after check completes
+                from PyQt6.QtCore import QTimer
+                def update_ui_done():
+                    refreshButton.setEnabled(True)
+                QTimer.singleShot(0, update_ui_done)
+        
+        thread = threading.Thread(target=do_health_check, daemon=True)
+        thread.start()
+    
     # Add refresh button for manual health check
     refreshButton = QPushButton(QApplication.translate("Button", "🔄 Check Server"))
     refreshButton.clicked.connect(trigger_health_check)
 
-    # Initial token status update
-    update_token_status()
+    # Update token status on load - DELAY until after dialog is created
+    def delayed_update_token_status():
+        try:
+            update_token_status()
+        except Exception as e:
+            _log.error(f"Failed to update token status in delayed callback: {e}", exc_info=True)
+    
+    # Delay by 100ms to ensure dialog is fully created
+    QTimer.singleShot(100, delayed_update_token_status)
 
     # Add widgets
     layout.addWidget(uploadToServerCheckbox)
