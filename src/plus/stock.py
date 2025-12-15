@@ -41,7 +41,7 @@ import functools
 from artisanlib.util import (decodeLocal, encodeLocal, getDirectory, is_int_list, is_float_list, render_weight,
     weight_units, float2float, convertWeight)
 from plus import config, connection, controller, util
-from typing import Final, TypedDict, List, Union, Optional, Tuple, Dict, TextIO, Set
+from typing import Final, TypedDict, List, Union, Optional, Tuple, Dict, TextIO, Set, Any
 from typing_extensions import NotRequired # Python <=3.10
 
 
@@ -132,6 +132,7 @@ class ScheduledItem(TypedDict, total=False):
     template: Optional[str] # roast_id (UUID) of the selected template profile if any
     note: str
     roasts: List[str]       # roast_id's (UUID) of already completed roasts of this item
+    custom_data: Optional[Dict[str, Any]]
 
 class Stock(TypedDict, total=False):
     coffees: List[Coffee]

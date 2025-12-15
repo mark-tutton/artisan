@@ -143,3 +143,37 @@ passwd: Optional[str] = None
 token: Optional[str] = None
 # login nickname assigned on login with session token
 nickname: Optional[str] = None
+
+custom_schedule_url: Optional[str] = None  # URL to fetch custom schedule JSON
+custom_schedule_action_url: Optional[str] = None  # URL to send custom actions
+
+# Load custom schedule URL from settings
+def load_custom_schedule_url() -> None:
+    """Load custom schedule URL from QSettings"""
+    global custom_schedule_url  # pylint: disable=global-statement
+    try:
+        from PyQt6.QtCore import QSettings
+    except ImportError:
+        from PyQt5.QtCore import QSettings  # type: ignore
+    settings = QSettings()
+    custom_schedule_url = settings.value('Plus/CustomScheduleURL', None, type=str)
+    if custom_schedule_url == '':
+        custom_schedule_url = None
+
+# Save custom schedule URL to settings
+def save_custom_schedule_url(url: Optional[str]) -> None:
+    """Save custom schedule URL to QSettings"""
+    global custom_schedule_url  # pylint: disable=global-statement
+    try:
+        from PyQt6.QtCore import QSettings
+    except ImportError:
+        from PyQt5.QtCore import QSettings  # type: ignore
+    settings = QSettings()
+    custom_schedule_url = url
+    if url:
+        settings.setValue('Plus/CustomScheduleURL', url)
+    else:
+        settings.remove('Plus/CustomScheduleURL')
+
+# Load on module import
+load_custom_schedule_url()

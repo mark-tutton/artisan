@@ -39,13 +39,15 @@ try:
     from PyQt6.QtGui import (QDrag, QPixmap, QPainter, QTextLayout, QTextLine, QColor, QFontMetrics, QCursor, QAction, QIcon) # @UnusedImport @Reimport  @UnresolvedImport
     from PyQt6.QtWidgets import (QMessageBox, QStackedWidget, QApplication, QWidget, QVBoxLayout, QHBoxLayout, QFrame, QTabWidget,  # @UnusedImport @Reimport  @UnresolvedImport
             QCheckBox, QGroupBox, QScrollArea, QLabel, QSizePolicy,  # @UnusedImport @Reimport  @UnresolvedImport
-            QGraphicsDropShadowEffect, QPlainTextEdit, QLineEdit, QMenu, QStatusBar, QToolButton)  # @UnusedImport @Reimport  @UnresolvedImport
+            QGraphicsDropShadowEffect, QPlainTextEdit, QLineEdit, QMenu, QStatusBar, QToolButton,  # @UnusedImport @Reimport  @UnresolvedImport
+            QDialog, QDialogButtonBox, QFormLayout, QPushButton)  # @UnusedImport @Reimport  @UnresolvedImport
 except ImportError:
     from PyQt5.QtCore import (QRect, Qt, QMimeData, QSettings, pyqtSlot, pyqtSignal, QPoint, QPointF, QLocale, QDate, QDateTime, QSemaphore, QTimer) # type: ignore # @UnusedImport @Reimport  @UnresolvedImport
     from PyQt5.QtGui import (QDrag, QPixmap, QPainter, QTextLayout, QTextLine, QColor, QFontMetrics, QCursor, QIcon) # type: ignore # @UnusedImport @Reimport @UnresolvedImport
     from PyQt5.QtWidgets import (QMessageBox, QStackedWidget, QApplication, QWidget, QVBoxLayout, QHBoxLayout, QFrame, QTabWidget, # type: ignore # @UnusedImport @Reimport @UnresolvedImport
             QCheckBox, QGroupBox, QScrollArea, QLabel, QSizePolicy, QAction,  # @UnusedImport @Reimport @UnresolvedImport
-            QGraphicsDropShadowEffect, QPlainTextEdit, QLineEdit, QMenu, QStatusBar, QToolButton)  # @UnusedImport @Reimport  @UnresolvedImport
+            QGraphicsDropShadowEffect, QPlainTextEdit, QLineEdit, QMenu, QStatusBar, QToolButton,  # @UnusedImport @Reimport  @UnresolvedImport
+            QDialog, QDialogButtonBox, QFormLayout, QPushButton)  # type: ignore # @UnusedImport @Reimport  @UnresolvedImport
 
 
 
@@ -231,6 +233,7 @@ class ScheduledItem(BaseModel):
     template: Optional[UUID4] = Field(default=None)  # note that this generates UUID objects. To get a UUID string without dashes use uuid.hex.
     note: Optional[str] = Field(default=None)
     roasts: Set[UUID4] = Field(default=set())        # note that this generates UUID objects. To get a UUID string without dashes use uuid.hex.
+    custom_data: Optional[Dict[str, Any]] = Field(default=None)
 
     @field_validator('*', mode='before') # pyrefly: ignore
     def remove_blank_strings(cls: BaseModel, v: Optional[str]) -> Optional[str]:   # pylint: disable=no-self-argument,no-self-use
@@ -1235,6 +1238,8 @@ class DragItem(StandardItem):
 
         self.update_widget()
 
+        self.displayCustomData()
+
     def is_hidden(self) -> bool:
         return is_hidden(self.data)
 
@@ -1497,6 +1502,24 @@ class DragItem(StandardItem):
         self.setStyle(self.style())
 
 
+    def displayCustomData(self) -> None:
+        """Display custom JSON data in the item widget"""
+        if self.data.custom_data is None:
+            return
+        
+        # Create a tooltip showing custom data
+        custom_info = []
+        for key, value in self.data.custom_data.items():
+            if key not in ['_id', 'id', 'schedule_id']:  # Skip ID fields
+                if isinstance(value, (dict, list)):
+                    value_str = json.dumps(value, indent=2)
+                else:
+                    value_str = str(value)
+                custom_info.append(f"<b>{key}:</b> {html.escape(value_str)}")
+        
+        if custom_info:
+            tooltip = "<br>".join(custom_info)
+            self.setToolTip(f"{self.toolTip()}<br><br><b>Custom Data:</b><br>{tooltip}")
 
 class BaseWidget(QWidget): # pyright: ignore[reportGeneralTypeIssues] # pyrefly: ignore # Argument to class must be a base class
     """Widget list
@@ -2212,6 +2235,16 @@ class ScheduleWindow(ArtisanResizeablDialog): # pyright:ignore[reportGeneralType
         self.main_layout.setContentsMargins(0, 0, 0, 0) # left, top, right, bottom
         self.main_layout.setSpacing(0)
 
+        # Button to configure custom schedule URL
+        settings_button = QPushButton(QApplication.translate('Plus', 'Settings'))
+        settings_button.clicked.connect(self.show_schedule_settings)
+        
+        # Add to the window
+        top_layout = QHBoxLayout()
+        top_layout.addStretch()
+        top_layout.addWidget(settings_button)
+        self.main_layout.insertLayout(0, top_layout)
+
         self.setLayout(self.main_layout)
 
         # we want minimize and close buttons, but no maximize buttons
@@ -2659,6 +2692,33 @@ class ScheduleWindow(ArtisanResizeablDialog): # pyright:ignore[reportGeneralType
         plus.stock.init()
         schedule:List[plus.stock.ScheduledItem] = plus.stock.getSchedule()
         _log.debug('schedule: %s',schedule)
+
+        # Fetch custom JSON data from remote server
+        custom_data = self.fetchCustomScheduleData()
+        if custom_data:
+            # Convert custom data to ScheduledItem objects and add to schedule
+            for item_data in custom_data:
+                try:
+                    # make sure the item has required fields
+                    if '_id' not in item_data:
+                        item_data['_id'] = item_data.get('id') or item_data.get('schedule_id') or f"custom_{hash(str(item_data))}"
+                    if 'date' in item_data and isinstance(item_data['date'], str):
+                        # Parse date string if needed
+                        from datetime import datetime as dt
+                        item_data['date'] = dt.fromisoformat(item_data['date'].replace('Z', '+00:00')).date()
+                    # Convert to ScheduledItem model
+                    schedule_item = ScheduledItem.model_validate(item_data)
+                    # Check if already exists
+                    existing = next((si for si in current_schedule if si.id == schedule_item.id), None)
+                    if existing is None:
+                        current_schedule.append(schedule_item)
+                    else:
+                        # Update existing item with custom data
+                        existing.custom_data = item_data
+                except Exception as e:  # pylint: disable=broad-except
+                    _log.exception('Error processing custom schedule item: %s', e)
+                    continue
+
         # sort current schedule by order cache (if any)
         if self.aw.scheduled_items_uuids != []:
             new_schedule:List[plus.stock.ScheduledItem] = []
@@ -3735,9 +3795,9 @@ class ScheduleWindow(ArtisanResizeablDialog): # pyright:ignore[reportGeneralType
                     completed_item:Optional[CompletedItem] = next((ci for ci in self.completed_items if ci.roastUUID.hex == self.aw.qmc.roastUUID), None)
                     if completed_item is not None:
                         self.updates_completed_from_roast_properties(completed_item)
-                if self.aw.plus_account is None:
-                    self.stacked_widget.setCurrentWidget(self.message_widget)
-                else:
+                # if self.aw.plus_account is None:
+                #     self.stacked_widget.setCurrentWidget(self.message_widget)
+                # else:
                     self.stacked_widget.setCurrentWidget(self.main_splitter)
                     # update scheduled and completed items
                     self.updateScheduledItems()                                 # updates the current schedule items from received stock data
@@ -3788,6 +3848,149 @@ class ScheduleWindow(ArtisanResizeablDialog): # pyright:ignore[reportGeneralType
         else:
             self.pending_updated = True # we mark that a an update got blocked to have this run by mouseMoveEvent after the drag-drop terminated and the semaphore got released
 
+        
+    def fetchCustomScheduleData(self, endpoint_url: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
+        """Fetch custom JSON schedule data from a remote server endpoint"""
+        _log.debug('fetchCustomScheduleData(%s)', endpoint_url)
+        
+        if endpoint_url is None:
+            from plus import config
+            endpoint_url = getattr(config, 'custom_schedule_url', None)
+            if endpoint_url is None:
+                _log.warning('No custom schedule endpoint URL configured')
+                return None
+        
+        try:
+            import plus.connection as connection
+            response = connection.getData(endpoint_url, authorized=True)
+            
+            if response.status_code == 200:
+                data = response.json()
+                _log.debug('Received custom schedule data: %s', data)
+                
+                # Handle different response formats
+                if isinstance(data, list):
+                    return data
+                elif isinstance(data, dict) and 'schedule' in data:
+                    return data['schedule']
+                elif isinstance(data, dict) and 'items' in data:
+                    return data['items']
+                else:
+                    _log.warning('Unexpected custom schedule data format: %s', type(data))
+                    return None
+            else:
+                _log.error('Failed to fetch custom schedule data: status %s', response.status_code)
+                return None
+        except Exception as e:  # pylint: disable=broad-except
+            _log.exception('Error fetching custom schedule data: %s', e)
+            return None
+
+    def mergeCustomDataIntoSchedule(self, custom_data: List[Dict[str, Any]]) -> None:
+        """Merge custom JSON data into existing scheduled items"""
+        _log.debug('mergeCustomDataIntoSchedule()')
+        
+        if not custom_data:
+            return
+        
+        # Create a mapping of schedule item IDs to custom data
+        custom_data_map: Dict[str, Dict[str, Any]] = {}
+        for item in custom_data:
+            item_id = item.get('_id') or item.get('id') or item.get('schedule_id')
+            if item_id:
+                custom_data_map[item_id] = item
+        
+        # Merge custom data into existing scheduled items
+        for scheduled_item in self.scheduled_items:
+            if scheduled_item.id in custom_data_map:
+                custom_item = custom_data_map[scheduled_item.id]
+                # Store the entire custom JSON object
+                scheduled_item.custom_data = custom_item
+                _log.debug('Merged custom data for item %s', scheduled_item.id)
+
+    def show_schedule_settings(self) -> None:
+        """Show dialog to configure custom schedule URL"""
+        from plus import config
+        
+        dialog = QDialog(self)
+        dialog.setWindowTitle(QApplication.translate('Plus', 'Schedule Settings'))
+        dialog.setModal(True)
+        dialog.resize(500, 150)
+        
+        layout = QVBoxLayout()
+        
+        # Custom schedule URL group
+        url_group = QGroupBox(QApplication.translate('Plus', 'Custom Schedule Server'))
+        url_layout = QFormLayout()
+        
+        url_edit = QLineEdit(config.custom_schedule_url or '')
+        url_edit.setPlaceholderText('http://server.com/api/schedule')
+        url_edit.setToolTip(QApplication.translate('Plus', 'URL to fetch custom schedule JSON data from'))
+        url_edit.setEnabled(True) 
+        url_edit.setReadOnly(False)
+        url_edit.setFocus() 
+        url_layout.addRow(QApplication.translate('Plus', 'Schedule URL:'), url_edit)
+        
+        url_group.setLayout(url_layout)
+        layout.addWidget(url_group)
+        
+        # Buttons
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        
+        dialog.setLayout(layout)
+        
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+        url_edit.setFocus()
+        
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            url = url_edit.text().strip()
+            if url:
+                config.save_custom_schedule_url(url)
+            else:
+                config.save_custom_schedule_url(None)
+            # Reload schedule after URL change
+            self.updateScheduleWindow()
+            self.aw.sendmessage(QApplication.translate('Plus', 'Schedule settings saved'))
+
+    def handleCustomDataInteraction(self, item: ScheduledItem, action: str, data: Any = None) -> None:
+        """Handle interactive actions on custom data"""
+        _log.debug('handleCustomDataInteraction(%s, %s)', item.id, action)
+        
+        if item.custom_data is None:
+            return
+        
+        # Example: Send custom action back to server
+        try:
+            from plus import connection, config
+            endpoint = getattr(config, 'custom_schedule_action_url', None)
+            if endpoint:
+                payload = {
+                    'schedule_id': item.id,
+                    'action': action,
+                    'data': data,
+                    'custom_data': item.custom_data
+                }
+                response = connection.sendData(
+                    f"{endpoint}/{item.id}",
+                    payload,
+                    verb='POST',
+                    authorized=True
+                )
+                if response.status_code == 200:
+                    self.aw.sendmessage(f"Custom action '{action}' executed successfully")
+                    # Refresh schedule after action
+                    self.updateScheduleWindow()
+                else:
+                    self.aw.sendmessage(f"Failed to execute action: {response.status_code}")
+        except Exception as e:  # pylint: disable=broad-except
+            _log.exception('Error handling custom data interaction: %s', e)
+            self.aw.sendmessage(f"Error: {str(e)}")
 
 ########
 # Displays
