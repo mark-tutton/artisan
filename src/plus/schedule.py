@@ -244,15 +244,29 @@ class ScheduledItem(BaseModel):
             return None
         return v
 
+    # @model_validator(mode='after') # pyright:ignore[reportArgumentType]
+    # def coffee_or_blend(self) -> 'ScheduledItem':
+    #     if self.coffee is None and self.blend is None:
+    #         raise ValueError('Either coffee or blend must be specified')
+    #     if self.coffee is not None and self.blend is not None:
+    #         raise ValueError('Either coffee or blend must be specified, but not both')
+    #     if len(self.title) == 0:
+    #         raise ValueError('Title cannot be empty')
+    #     if (self.date - datetime.datetime.now(datetime.timezone.utc).astimezone().date()).days < 0:
+    #         raise ValueError('Date should not be in the past')
+    #     return self
     @model_validator(mode='after') # pyright:ignore[reportArgumentType]
     def coffee_or_blend(self) -> 'ScheduledItem':
         if self.coffee is None and self.blend is None:
-            raise ValueError('Either coffee or blend must be specified')
+            # Allow items without coffee/blend if they have custom_data (custom items)
+            if self.custom_data is None:
+                raise ValueError('Either coffee or blend must be specified')
         if self.coffee is not None and self.blend is not None:
             raise ValueError('Either coffee or blend must be specified, but not both')
         if len(self.title) == 0:
             raise ValueError('Title cannot be empty')
-        if (self.date - datetime.datetime.now(datetime.timezone.utc).astimezone().date()).days < 0:
+        # Allow past dates for custom items
+        if self.custom_data is None and (self.date - datetime.datetime.now(datetime.timezone.utc).astimezone().date()).days < 0:
             raise ValueError('Date should not be in the past')
         return self
 
@@ -839,13 +853,35 @@ def scheduleditem_beans_descriptions(weight_unit_idx:int, item:ScheduledItem) ->
         blend = next((b for b in blends if plus.stock.getBlendId(b) == item.blend and plus.stock.getBlendStockDict(b)['location_hr_id'] == item.store), None)
         if blend is not None:
             return plus.stock.blend2ratio_beans(blend, item.weight, html_escape=False)
+        # For custom items, if blend not found in stock, use fallback
+        elif item.custom_data is not None:
+            blend_name = item.custom_data.get('blend_name') or item.custom_data.get('blend_label') or item.blend
+            return blend_name, [(1, blend_name)]
     item_coffee = item.coffee
     if item_coffee is not None:
         coffee = plus.stock.getCoffee(item_coffee)
         if coffee is not None:
             return None, [(1,plus.stock.coffeeLabel(coffee))]
+        # For custom items, if coffee not found in stock, use fallback
+        elif item.custom_data is not None:
+            # Try to get coffee name from custom_data, or use coffee ID as fallback
+            coffee_name = item.custom_data.get('coffee_name') or item.custom_data.get('coffee_label') or item_coffee
+            return None, [(1, coffee_name)]
+    # For custom items without coffee/blend, use title or custom data
+    if item.custom_data is not None:
+        # Try to get description from custom_data
+        description = item.custom_data.get('description') or item.custom_data.get('coffee_name') or item.title
+        return None, [(1, description)]
+    # Last resort: if we have a coffee ID but no custom_data, just use the coffee ID
+    if item_coffee is not None:
+        return None, [(1, item_coffee)]
+    # Last resort: if we have a blend ID but no custom_data, just use the blend ID
+    if item.blend is not None:
+        return None, [(1, item.blend)]
     _log.error('scheduleditem_beans_descriptions(%s,%s) could not be resolved', weight_unit_idx, item)
-    return None, []
+    return None, []  # Always return a tuple, never None
+
+
 
 def scheduleditem_beans_description(weight_unit_idx:int, item:ScheduledItem) -> str:
     beans_description:str = ''
@@ -857,15 +893,25 @@ def scheduleditem_beans_description(weight_unit_idx:int, item:ScheduledItem) -> 
             if store_label != '':
                 store_label = f'<br>[{html.escape(store_label)}]'
             beans_description = f'<b>{html.escape(plus.stock.coffeeLabel(coffee))}</b>{store_label}'
+        # For custom items, if coffee not found in stock, use fallback
+        elif item.custom_data is not None:
+            coffee_name = item.custom_data.get('coffee_name') or item.custom_data.get('coffee_label') or item_coffee
+            store_label = f'<br>[{html.escape(item.store)}]' if item.store else ''
+            beans_description = f'<b>{html.escape(coffee_name)}</b>{store_label}'
     else:
-        blends = plus.stock.getStandardBlends(weight_unit_idx, item.store)
-        blend = next((b for b in blends if plus.stock.getBlendId(b) == item.blend and plus.stock.getBlendStockDict(b)['location_hr_id'] == item.store), None)
-        if blend is not None:
-            blend_lines = ''.join([f'<tr><td>{html.escape(bl[0])}</td><td>{html.escape(bl[1])}</td></tr>'
-                        for bl in plus.stock.blend2weight_beans(blend, weight_unit_idx, item.weight)])
-            beans_description = f"<b>{html.escape(plus.stock.getBlendName(blend))}</b> [{html.escape(plus.stock.getBlendStockDict(blend)['location_label'])}]<table>{blend_lines}</table>"
+        if item.blend is not None:
+            blends = plus.stock.getStandardBlends(weight_unit_idx, item.store)
+            blend = next((b for b in blends if plus.stock.getBlendId(b) == item.blend and plus.stock.getBlendStockDict(b)['location_hr_id'] == item.store), None)
+            if blend is not None:
+                blend_lines = ''.join([f'<tr><td>{html.escape(bl[0])}</td><td>{html.escape(bl[1])}</td></tr>'
+                            for bl in plus.stock.blend2weight_beans(blend, weight_unit_idx, item.weight)])
+                beans_description = f"<b>{html.escape(plus.stock.getBlendName(blend))}</b> [{html.escape(plus.stock.getBlendStockDict(blend)['location_label'])}]<table>{blend_lines}</table>"
+        # For custom items without coffee/blend, use custom data or title
+        if not beans_description and item.custom_data is not None:
+            description = item.custom_data.get('description') or item.custom_data.get('coffee_name') or item.title
+            store_label = f'<br>[{html.escape(item.store)}]' if item.store else ''
+            beans_description = f'<b>{html.escape(description)}</b>{store_label}'
     return beans_description
-
 
 def completeditem_beans_descriptions(item:CompletedItem) -> List[Tuple[float,str]]:
     return [(1,(item.prefix or item.coffee_label or ''))]
@@ -2683,9 +2729,93 @@ class ScheduleWindow(ArtisanResizeablDialog): # pyright:ignore[reportGeneralType
         self.aw.sendmessage(QApplication.translate('Message','Scheduler stopped'))
         self.accept()
 
-    # updates the current schedule items by joining its roast with those received as part of a stock update from the server
-    # adding new items at the end
+    # # updates the current schedule items by joining its roast with those received as part of a stock update from the server
+    # # adding new items at the end
+    # def updateScheduledItems(self) -> None:
+    #     today = datetime.datetime.now(datetime.timezone.utc).astimezone().date()
+    #     # remove outdated items which remained in the open app from yesterday
+    #     current_schedule:List[ScheduledItem] = [si for si in self.scheduled_items if (si.date - today).days >= 0]
+    #     plus.stock.init()
+    #     schedule:List[plus.stock.ScheduledItem] = plus.stock.getSchedule()
+    #     _log.debug('schedule: %s',schedule)
+
+    #     # Fetch custom JSON data from remote server
+    #     custom_data = self.fetchCustomScheduleData()
+    #     if custom_data:
+    #         # Convert custom data to ScheduledItem objects and add to schedule
+    #         for item_data in custom_data:
+    #             try:
+    #                 # make sure the item has required fields
+    #                 if '_id' not in item_data:
+    #                     item_data['_id'] = item_data.get('id') or item_data.get('schedule_id') or f"custom_{hash(str(item_data))}"
+    #                 if 'date' in item_data and isinstance(item_data['date'], str):
+    #                     # Parse date string if needed
+    #                     from datetime import datetime as dt
+    #                     item_data['date'] = dt.fromisoformat(item_data['date'].replace('Z', '+00:00')).date()
+    #                 # Convert to ScheduledItem model
+    #                 schedule_item = ScheduledItem.model_validate(item_data)
+    #                 # Check if already exists
+    #                 existing = next((si for si in current_schedule if si.id == schedule_item.id), None)
+    #                 if existing is None:
+    #                     current_schedule.append(schedule_item)
+    #                 else:
+    #                     # Update existing item with custom data
+    #                     existing.custom_data = item_data
+    #             except Exception as e:  # pylint: disable=broad-except
+    #                 _log.exception('Error processing custom schedule item: %s', e)
+    #                 continue
+
+    #     # sort current schedule by order cache (if any)
+    #     if self.aw.scheduled_items_uuids != []:
+    #         new_schedule:List[plus.stock.ScheduledItem] = []
+    #         for uuid in self.aw.scheduled_items_uuids:
+    #             item = next((s for s in schedule if '_id' in s and s['_id'] == uuid), None)
+    #             if item is not None:
+    #                 new_schedule.append(item)
+    #         # append all schedule items with uuid not in the order cache
+    #         schedule = new_schedule + [s for s in schedule if '_id' in s and s['_id'] not in self.aw.scheduled_items_uuids]
+    #         # reset order cache to prevent resorting until next restart as this cached sort order is only used on startup to
+    #         # initially reconstruct the previous order w.r.t. the server ordered schedule loaded from the stock received
+    #         self.aw.scheduled_items_uuids = []
+    #         # schedule now only contains items received from the server (in local order)
+    #     else:
+    #         # remove items from current_schedule that are not in schedule
+    #         current_schedule = [si for si in current_schedule if next((s for s in schedule if '_id' in s and s['_id'] == si.id), None) is not None]
+    #     # iterate over new schedule
+    #     for s in schedule:
+    #         try:
+    #             schedule_item:ScheduledItem = ScheduledItem.model_validate(s)
+    #             idx_existing_item:Optional[int] = next((i for i, si in enumerate(current_schedule) if si.id == schedule_item.id), None)
+    #             # take new item (but merge completed items)
+    #             if idx_existing_item is not None:
+    #                 # remember existing item
+    #                 existing_item = current_schedule[idx_existing_item] # pyrefly: ignore[index-error]
+    #                 # replace the current item with the updated one from the server
+    #                 current_schedule[idx_existing_item] = schedule_item # pyrefly: ignore[unsupported-operation]
+    #                 # merge the completed roasts and set them to the newly received item
+    #                 schedule_item.roasts.update(existing_item.roasts)
+    #                 # if all done, remove that item as it is completed
+    #                 if len(schedule_item.roasts) >= schedule_item.count:
+    #                     # remove existing_item from schedule if completed (#roasts >= count)
+    #                     current_schedule.remove(schedule_item)
+    #             elif (len(schedule_item.roasts) < schedule_item.count and
+    #                     (sum(1 for ci in self.completed_items if ci.scheduleID == schedule_item.id) < schedule_item.count)):
+    #                 # only if not yet enough roasts got registered in the local schedule_item.roasts
+    #                 # and there are not enough completed roasts registered locally belonging to this schedule_item by schedule_item.id
+    #                 # we append non-completed new schedule item to schedule
+    #                 # NOTE: this second condition is needed it might happen that the server did not receive (yet) all completed roasts
+    #                 #  for a ScheduleItem which was locally already removed as completed to prevent re-adding that same ScheduleItem
+    #                 #  on re-receiving the current schedule from the server as still received from the server,
+    #                 #  we check if locally we already have registered enough completed roasts in self.completed_items for this ScheduleItem
+    #                 current_schedule.append(schedule_item)
+    #         except Exception:  # pylint: disable=broad-except
+    #             pass # validation fails for outdated items
+    #     # update the list of schedule items to be displayed
+    #     self.scheduled_items = list(current_schedule)
+
+# Around line 2688, modify updateScheduledItems:
     def updateScheduledItems(self) -> None:
+        _log.info('updateScheduledItems() called')
         today = datetime.datetime.now(datetime.timezone.utc).astimezone().date()
         # remove outdated items which remained in the open app from yesterday
         current_schedule:List[ScheduledItem] = [si for si in self.scheduled_items if (si.date - today).days >= 0]
@@ -2693,9 +2823,14 @@ class ScheduleWindow(ArtisanResizeablDialog): # pyright:ignore[reportGeneralType
         schedule:List[plus.stock.ScheduledItem] = plus.stock.getSchedule()
         _log.debug('schedule: %s',schedule)
 
+        # Track custom item IDs to preserve them during filtering
+        custom_item_ids: Set[str] = set()
+
         # Fetch custom JSON data from remote server
+        _log.info('Fetching custom schedule data...')
         custom_data = self.fetchCustomScheduleData()
         if custom_data:
+            _log.info('Received %d custom schedule items', len(custom_data))
             # Convert custom data to ScheduledItem objects and add to schedule
             for item_data in custom_data:
                 try:
@@ -2706,15 +2841,38 @@ class ScheduleWindow(ArtisanResizeablDialog): # pyright:ignore[reportGeneralType
                         # Parse date string if needed
                         from datetime import datetime as dt
                         item_data['date'] = dt.fromisoformat(item_data['date'].replace('Z', '+00:00')).date()
+                    
+                    # Store custom_data before validation (it might get stripped)
+                    custom_data_value = item_data.get('custom_data')
+
+                    # If this is from custom endpoint, mark it as custom even if custom_data field is missing
+                    if custom_data_value is None:
+                        custom_data_value = item_data.copy()  # Store entire item as custom_data
+
+                    # Ensure custom_data is in item_data before validation so validator allows past dates
+                    if 'custom_data' not in item_data or item_data.get('custom_data') is None:
+                        item_data['custom_data'] = custom_data_value
+                    
                     # Convert to ScheduledItem model
-                    schedule_item = ScheduledItem.model_validate(item_data)
+                    # Temporarily disable strict validation for custom items
+                    schedule_item = ScheduledItem.model_validate(item_data, strict=False)
+                    
+                    # Restore custom_data if it was lost
+                    if custom_data_value:
+                        schedule_item.custom_data = custom_data_value
+                    
+                    # Mark as custom item
+                    custom_item_ids.add(schedule_item.id)
+                    
                     # Check if already exists
                     existing = next((si for si in current_schedule if si.id == schedule_item.id), None)
                     if existing is None:
                         current_schedule.append(schedule_item)
+                        _log.debug('Added custom schedule item: %s', schedule_item.id)
                     else:
                         # Update existing item with custom data
-                        existing.custom_data = item_data
+                        existing.custom_data = custom_data_value
+                        _log.debug('Updated custom data for existing item: %s', schedule_item.id)
                 except Exception as e:  # pylint: disable=broad-except
                     _log.exception('Error processing custom schedule item: %s', e)
                     continue
@@ -2729,12 +2887,15 @@ class ScheduleWindow(ArtisanResizeablDialog): # pyright:ignore[reportGeneralType
             # append all schedule items with uuid not in the order cache
             schedule = new_schedule + [s for s in schedule if '_id' in s and s['_id'] not in self.aw.scheduled_items_uuids]
             # reset order cache to prevent resorting until next restart as this cached sort order is only used on startup to
-            # initially reconstruct the previous order w.r.t. the server ordered schedule loaded from the stock received
+            # initially reconstruct the previous order w.r.t. the server ordered schedule loaded from the server
             self.aw.scheduled_items_uuids = []
             # schedule now only contains items received from the server (in local order)
         else:
-            # remove items from current_schedule that are not in schedule
-            current_schedule = [si for si in current_schedule if next((s for s in schedule if '_id' in s and s['_id'] == si.id), None) is not None]
+            # remove items from current_schedule that are not in schedule, BUT preserve custom items
+            current_schedule = [
+                si for si in current_schedule 
+                if si.id in custom_item_ids or next((s for s in schedule if '_id' in s and s['_id'] == si.id), None) is not None
+            ]
         # iterate over new schedule
         for s in schedule:
             try:
@@ -3695,6 +3856,12 @@ class ScheduleWindow(ArtisanResizeablDialog): # pyright:ignore[reportGeneralType
                 # register roastUUID in (local) currently selected ScheduleItem
                 # add roast to list of completed roasts
                 remaining_item.data.roasts.add(UUID(self.aw.qmc.roastUUID, version=4))
+
+                # If this is a custom schedule item, write back to custom backend
+                is_custom_item = remaining_item.data.custom_data is not None
+                if is_custom_item:
+                    self._update_custom_schedule_item(remaining_item)
+
                 # reduce number of prepared batches of the currently selected remaining item
                 take_prepared(self.aw.plus_account_id, remaining_item.data)
                 # calculate weight estimate
@@ -3746,6 +3913,66 @@ class ScheduleWindow(ArtisanResizeablDialog): # pyright:ignore[reportGeneralType
                 _log.error(e)
             self.updateScheduleWindow()
 
+    def _update_custom_schedule_item(self, remaining_item: DragItem) -> None:
+        """Update custom schedule item on the backend when a roast completes"""
+        try:
+            from plus import config
+            import requests
+            from artisanlib.plugins.auth_manager import get_auth_manager
+            
+            # Get the custom schedule URL
+            custom_url = getattr(config, 'custom_schedule_url', None)
+            if not custom_url:
+                _log.warning('No custom schedule URL configured, cannot update custom item')
+                return
+            
+            # Construct update URL - handle both cases:
+            # 1. URL is base: http://localhost:5101/api/production-schedule
+            # 2. URL is full path: http://localhost:5101/api/production-schedule
+            if custom_url.endswith('/api/production-schedule'):
+                # URL already includes the path, just append the ID
+                update_url = f"{custom_url}/{remaining_item.data.id}"
+            else:
+                # URL is base, add the path
+                base_url = custom_url.rstrip('/')
+                update_url = f"{base_url}/api/production-schedule/{remaining_item.data.id}"
+            
+            # Get auth headers
+            auth_manager = get_auth_manager()
+            headers = {}
+            if auth_manager:
+                headers = auth_manager.get_auth_headers()
+                _log.debug('Using auth headers: %s', list(headers.keys()))
+            else:
+                _log.warning('Auth manager not available, making request without auth')
+            
+            # Prepare update payload - convert roasts set to list of strings
+            roasts_list = [str(roast_uuid.hex) for roast_uuid in remaining_item.data.roasts]
+            
+            update_data = {
+                'roasts': roasts_list,
+                'updated_at': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            }
+            
+            _log.info('Updating custom schedule item %s at %s with roasts: %s', 
+                     remaining_item.data.id, update_url, roasts_list)
+            
+            response = requests.put(
+                update_url,
+                json=update_data,
+                headers=headers,
+                timeout=(10, 30)
+            )
+            
+            if response.status_code == 200:
+                _log.info('Successfully updated custom schedule item %s on backend', remaining_item.data.id)
+            else:
+                _log.error('Failed to update custom schedule item: status %s, response: %s', 
+                          response.status_code, response.text)
+        except Exception as e:  # pylint: disable=broad-except
+            _log.exception('Error updating custom schedule item on backend: %s', e)
+    
+    
     # register the current completed roast
     @pyqtSlot()
     def register_completed_roast_slot(self) -> None:
@@ -3775,83 +4002,202 @@ class ScheduleWindow(ArtisanResizeablDialog): # pyright:ignore[reportGeneralType
     # also called on switching between light and dark mode to adjust the colors accordingly
     # Note that on app raise (depending on the interval) also a stock update is triggered fetching the latest schedule from the server along
     @pyqtSlot()
+    # def updateScheduleWindow(self) -> None:
+    #     _log.info('updateScheduleWindow() called')
+    #     _log.debug('updateScheduleWindow()')
+    #     # lock resources to prevent race conditions
+    #     gotlock:bool = update_schedule_window_semaphore.tryAcquire(1)
+    #     # if not gotlock:
+    #     #     _log.warning('updateScheduleWindow: semaphore not available, marking as pending')
+    #     #     self.pending_updated = True
+    #     #     return
+
+    #     if gotlock:
+    #         try:
+    #             self.pending_updated = False # reset pending updates to avoid cycles
+    #             self.being_updated = True # no user interactions (like right/left click processing)
+    #             self.drag_remaining.drag_source = None # block ongoing drag-and-drop action from completion and avoid dragging deleted objects if update occurs during a drag
+    #             self.TabWidget.setEnabled(False) # block tab switches
+    #             #
+    #             self.update_styles()
+    #             # load completed roasts cache
+    #             load_completed(self.aw.plus_account_id)
+    #             # if the currently loaded profile is among the completed_items, its corresponding entry in that completed list is updated with the information
+    #             # from the current loaded profile as properties might have been changed via the RoastProperties dialog
+    #             if self.aw.qmc.roastUUID is not None:
+    #                 completed_item:Optional[CompletedItem] = next((ci for ci in self.completed_items if ci.roastUUID.hex == self.aw.qmc.roastUUID), None)
+    #                 if completed_item is not None:
+    #                     self.updates_completed_from_roast_properties(completed_item)
+    #             # if self.aw.plus_account is None:
+    #             #     self.stacked_widget.setCurrentWidget(self.message_widget)
+    #             # else:
+    #                 self.stacked_widget.setCurrentWidget(self.main_splitter)
+    #                 # update scheduled and completed items
+    #                 _log.info('About to call updateScheduledItems()')
+    #                 try:
+    #                     self.updateScheduledItems()                                 # updates the current schedule items from received stock data
+    #                     _log.info('updateScheduledItems() completed successfully')
+    #                 except Exception as e:  # pylint: disable=broad-except
+    #                     _log.exception('Error in updateScheduledItems(): %s', e)
+    #                 load_prepared(self.aw.plus_account_id, self.scheduled_items)# load the prepared items cache and update according to the valid schedule items
+    #                 load_hidden(self.aw.plus_account_id, self.scheduled_items)  # load the hidden items cache and update according to the valid schedule items
+    #                 self.completed_items = self.getCompletedItems()             # updates completed items from cache
+    #                 self.updateFilters()                                        # update filter widget (user and machine)
+
+    #                 # show empty message if there are no scheduled items or the schedule items scrolling widget if there are entries
+    #                 if self.scheduled_items == []:
+    #                     # clear selection and reset scheduleID
+    #                     self.selected_remaining_item = None
+    #                     if self.aw.qmc.timeindex[6] == 0:
+    #                         # if DROP is not set we clear the ScheduleItem UUID/Date
+    #                         self.aw.qmc.scheduleID = None
+    #                         self.aw.qmc.scheduleDate = None
+    #                     # show empty schedule message
+    #                     self.remaining_message.setText(QApplication.translate('Plus', 'Schedule empty!{}Plan your schedule on {}').format('<BR><BR>', f'<a href="{schedulerLink()}">{plus.config.app_name}</a><br>'))
+    #                     self.stacked_remaining_widget.setCurrentWidget(self.remaining_message_widget)
+    #                     self.setAppBadge(0)
+    #                 else:
+    #                     displayed_scheduled_items = self.updateRemainingItems() # redraw To-Do's widget
+    #                     if displayed_scheduled_items > 0:
+    #                         self.stacked_remaining_widget.setCurrentWidget(self.remaining_scrollarea)
+    #                     else:
+    #                         self.remaining_message.setText(f"{QApplication.translate('Plus', 'Nothing scheduled for you today!{}Deactivate filters to see all items.').format('<BR><BR>')}<br>")
+    #                         self.stacked_remaining_widget.setCurrentWidget(self.remaining_message_widget)
+
+
+    #                 # show empty message if there are no completed items or the completed splitter widget if there are entries
+    #                 if not self.completed_items:
+    #                     self.completed_stacked_widget.setCurrentWidget(self.completed_message_widget)
+    #                 else:
+    #                     self.updateRoastedItems()                               # redraw Completed widget
+    #                     self.completed_stacked_widget.setCurrentWidget(self.completed_splitter)
+
+    #                 # the weight unit might have changed, we update its label
+    #                 self.roasted_weight_suffix.setText(self.aw.qmc.weight[2].lower())
+    #                 self.roasted_yield_suffix.setText(self.aw.qmc.weight[2].lower())
+    #                 self.roasted_defects_suffix.setText(self.aw.qmc.weight[2].lower())
+    #                 # update next weight item
+    #                 self.set_next(update_both=True)
+    #         finally:
+    #             if update_schedule_window_semaphore.available() < 1:
+    #                 update_schedule_window_semaphore.release(1)
+    #             self.TabWidget.setEnabled(True) # re-enable tab switches
+    #             self.being_updated = False # reallow user interactions (like right/left click processing)
+    #     else:
+    #         self.pending_updated = True # we mark that a an update got blocked to have this run by mouseMoveEvent after the drag-drop terminated and the semaphore got released
+
+    @pyqtSlot()
     def updateScheduleWindow(self) -> None:
+        _log.info('updateScheduleWindow() called')
         _log.debug('updateScheduleWindow()')
         # lock resources to prevent race conditions
         gotlock:bool = update_schedule_window_semaphore.tryAcquire(1)
-        if gotlock:
+        if not gotlock:
+            _log.warning('updateScheduleWindow: semaphore not available, marking as pending')
+            self.pending_updated = True
+            return
+
+        _log.info('updateScheduleWindow: acquired semaphore lock')
+        try:
+            self.pending_updated = False # reset pending updates to avoid cycles
+            self.being_updated = True # no user interactions (like right/left click processing)
+            self.drag_remaining.drag_source = None # block ongoing drag-and-drop action from completion and avoid dragging deleted objects if update occurs during a drag
+            self.TabWidget.setEnabled(False) # block tab switches
+            
+            _log.info('updateScheduleWindow: calling update_styles()')
+            self.update_styles()
+            
+            # load completed roasts cache
+            _log.info('updateScheduleWindow: calling load_completed()')
+            load_completed(self.aw.plus_account_id)
+            
+            # if the currently loaded profile is among the completed_items, its corresponding entry in that completed list is updated with the information
+            # from the current loaded profile as properties might have been changed via the RoastProperties dialog
+            if self.aw.qmc.roastUUID is not None:
+                completed_item:Optional[CompletedItem] = next((ci for ci in self.completed_items if ci.roastUUID.hex == self.aw.qmc.roastUUID), None)
+                if completed_item is not None:
+                    _log.info('updateScheduleWindow: updating completed item from roast properties')
+                    self.updates_completed_from_roast_properties(completed_item)
+            
+            # if self.aw.plus_account is None:
+            #     self.stacked_widget.setCurrentWidget(self.message_widget)
+            # else:
+            _log.info('updateScheduleWindow: setting main_splitter widget')
+            self.stacked_widget.setCurrentWidget(self.main_splitter)
+            
+            # update scheduled and completed items
+            _log.info('About to call updateScheduledItems()')
             try:
-                self.pending_updated = False # reset pending updates to avoid cycles
-                self.being_updated = True # no user interactions (like right/left click processing)
-                self.drag_remaining.drag_source = None # block ongoing drag-and-drop action from completion and avoid dragging deleted objects if update occurs during a drag
-                self.TabWidget.setEnabled(False) # block tab switches
-                #
-                self.update_styles()
-                # load completed roasts cache
-                load_completed(self.aw.plus_account_id)
-                # if the currently loaded profile is among the completed_items, its corresponding entry in that completed list is updated with the information
-                # from the current loaded profile as properties might have been changed via the RoastProperties dialog
-                if self.aw.qmc.roastUUID is not None:
-                    completed_item:Optional[CompletedItem] = next((ci for ci in self.completed_items if ci.roastUUID.hex == self.aw.qmc.roastUUID), None)
-                    if completed_item is not None:
-                        self.updates_completed_from_roast_properties(completed_item)
-                # if self.aw.plus_account is None:
-                #     self.stacked_widget.setCurrentWidget(self.message_widget)
-                # else:
-                    self.stacked_widget.setCurrentWidget(self.main_splitter)
-                    # update scheduled and completed items
-                    self.updateScheduledItems()                                 # updates the current schedule items from received stock data
-                    load_prepared(self.aw.plus_account_id, self.scheduled_items)# load the prepared items cache and update according to the valid schedule items
-                    load_hidden(self.aw.plus_account_id, self.scheduled_items)  # load the hidden items cache and update according to the valid schedule items
-                    self.completed_items = self.getCompletedItems()             # updates completed items from cache
-                    self.updateFilters()                                        # update filter widget (user and machine)
+                self.updateScheduledItems()                                 # updates the current schedule items from received stock data
+                _log.info('updateScheduledItems() completed successfully')
+            except Exception as e:  # pylint: disable=broad-except
+                _log.exception('Error in updateScheduledItems(): %s', e)
+            
+            _log.info('updateScheduleWindow: calling load_prepared()')
+            load_prepared(self.aw.plus_account_id, self.scheduled_items)# load the prepared items cache and update according to the valid schedule items
+            
+            _log.info('updateScheduleWindow: calling load_hidden()')
+            load_hidden(self.aw.plus_account_id, self.scheduled_items)  # load the hidden items cache and update according to the valid schedule items
+            
+            _log.info('updateScheduleWindow: calling getCompletedItems()')
+            self.completed_items = self.getCompletedItems()             # updates completed items from cache
+            
+            _log.info('updateScheduleWindow: calling updateFilters()')
+            self.updateFilters()                                        # update filter widget (user and machine)
 
-                    # show empty message if there are no scheduled items or the schedule items scrolling widget if there are entries
-                    if self.scheduled_items == []:
-                        # clear selection and reset scheduleID
-                        self.selected_remaining_item = None
-                        if self.aw.qmc.timeindex[6] == 0:
-                            # if DROP is not set we clear the ScheduleItem UUID/Date
-                            self.aw.qmc.scheduleID = None
-                            self.aw.qmc.scheduleDate = None
-                        # show empty schedule message
-                        self.remaining_message.setText(QApplication.translate('Plus', 'Schedule empty!{}Plan your schedule on {}').format('<BR><BR>', f'<a href="{schedulerLink()}">{plus.config.app_name}</a><br>'))
-                        self.stacked_remaining_widget.setCurrentWidget(self.remaining_message_widget)
-                        self.setAppBadge(0)
-                    else:
-                        displayed_scheduled_items = self.updateRemainingItems() # redraw To-Do's widget
-                        if displayed_scheduled_items > 0:
-                            self.stacked_remaining_widget.setCurrentWidget(self.remaining_scrollarea)
-                        else:
-                            self.remaining_message.setText(f"{QApplication.translate('Plus', 'Nothing scheduled for you today!{}Deactivate filters to see all items.').format('<BR><BR>')}<br>")
-                            self.stacked_remaining_widget.setCurrentWidget(self.remaining_message_widget)
+            # show empty message if there are no scheduled items or the schedule items scrolling widget if there are entries
+            if self.scheduled_items == []:
+                _log.info('updateScheduleWindow: schedule is empty')
+                # clear selection and reset scheduleID
+                self.selected_remaining_item = None
+                if self.aw.qmc.timeindex[6] == 0:
+                    # if DROP is not set we clear the ScheduleItem UUID/Date
+                    self.aw.qmc.scheduleID = None
+                    self.aw.qmc.scheduleDate = None
+                # show empty schedule message
+                self.remaining_message.setText(QApplication.translate('Plus', 'Schedule empty!{}Plan your schedule on {}').format('<BR><BR>', f'<a href="{schedulerLink()}">{plus.config.app_name}</a><br>'))
+                self.stacked_remaining_widget.setCurrentWidget(self.remaining_message_widget)
+                self.setAppBadge(0)
+            else:
+                _log.info('updateScheduleWindow: schedule has %d items, calling updateRemainingItems()', len(self.scheduled_items))
+                displayed_scheduled_items = self.updateRemainingItems() # redraw To-Do's widget
+                if displayed_scheduled_items > 0:
+                    self.stacked_remaining_widget.setCurrentWidget(self.remaining_scrollarea)
+                else:
+                    self.remaining_message.setText(f"{QApplication.translate('Plus', 'Nothing scheduled for you today!{}Deactivate filters to see all items.').format('<BR><BR>')}<br>")
+                    self.stacked_remaining_widget.setCurrentWidget(self.remaining_message_widget)
 
 
-                    # show empty message if there are no completed items or the completed splitter widget if there are entries
-                    if not self.completed_items:
-                        self.completed_stacked_widget.setCurrentWidget(self.completed_message_widget)
-                    else:
-                        self.updateRoastedItems()                               # redraw Completed widget
-                        self.completed_stacked_widget.setCurrentWidget(self.completed_splitter)
+            # show empty message if there are no completed items or the completed splitter widget if there are entries
+            if not self.completed_items:
+                _log.info('updateScheduleWindow: no completed items')
+                self.completed_stacked_widget.setCurrentWidget(self.completed_message_widget)
+            else:
+                _log.info('updateScheduleWindow: has %d completed items, calling updateRoastedItems()', len(self.completed_items))
+                self.updateRoastedItems()                               # redraw Completed widget
+                self.completed_stacked_widget.setCurrentWidget(self.completed_splitter)
 
-                    # the weight unit might have changed, we update its label
-                    self.roasted_weight_suffix.setText(self.aw.qmc.weight[2].lower())
-                    self.roasted_yield_suffix.setText(self.aw.qmc.weight[2].lower())
-                    self.roasted_defects_suffix.setText(self.aw.qmc.weight[2].lower())
-                    # update next weight item
-                    self.set_next(update_both=True)
-            finally:
-                if update_schedule_window_semaphore.available() < 1:
-                    update_schedule_window_semaphore.release(1)
-                self.TabWidget.setEnabled(True) # re-enable tab switches
-                self.being_updated = False # reallow user interactions (like right/left click processing)
-        else:
-            self.pending_updated = True # we mark that a an update got blocked to have this run by mouseMoveEvent after the drag-drop terminated and the semaphore got released
+            # the weight unit might have changed, we update its label
+            self.roasted_weight_suffix.setText(self.aw.qmc.weight[2].lower())
+            self.roasted_yield_suffix.setText(self.aw.qmc.weight[2].lower())
+            self.roasted_defects_suffix.setText(self.aw.qmc.weight[2].lower())
+            # update next weight item
+            self.set_next(update_both=True)
+            _log.info('updateScheduleWindow: completed successfully')
+        except Exception as e:  # pylint: disable=broad-except
+            _log.exception('updateScheduleWindow: exception in try block: %s', e)
+        finally:
+            _log.info('updateScheduleWindow: entering finally block')
+            if update_schedule_window_semaphore.available() < 1:
+                update_schedule_window_semaphore.release(1)
+                _log.info('updateScheduleWindow: released semaphore')
+            self.TabWidget.setEnabled(True) # re-enable tab switches
+            self.being_updated = False # reallow user interactions (like right/left click processing)
+            _log.info('updateScheduleWindow: finally block completed')
 
-        
     def fetchCustomScheduleData(self, endpoint_url: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
         """Fetch custom JSON schedule data from a remote server endpoint"""
-        _log.debug('fetchCustomScheduleData(%s)', endpoint_url)
+        _log.info('fetchCustomScheduleData called, endpoint_url=%s', endpoint_url)
         
         if endpoint_url is None:
             from plus import config
@@ -3860,12 +4206,32 @@ class ScheduleWindow(ArtisanResizeablDialog): # pyright:ignore[reportGeneralType
                 _log.warning('No custom schedule endpoint URL configured')
                 return None
         
+        _log.info('Fetching custom schedule from: %s', endpoint_url)
         try:
-            import plus.connection as connection
-            response = connection.getData(endpoint_url, authorized=True)
+            import requests
+            from artisanlib.plugins.auth_manager import get_auth_manager
             
+            # Get auth headers from the global auth manager (same as plugins use)
+            auth_manager = get_auth_manager()
+            headers = {}
+            if auth_manager:
+                headers = auth_manager.get_auth_headers()
+                _log.info('Using auth headers: %s', list(headers.keys()))
+            else:
+                _log.warning('Auth manager not available, making request without auth')
+            
+            # Make the request with auth headers
+            _log.info('Making GET request to %s', endpoint_url)
+            response = requests.get(
+                endpoint_url,
+                headers=headers,
+                timeout=(10, 30)  # (connect timeout, read timeout)
+            )
+            
+            _log.info('Response status: %s', response.status_code)
             if response.status_code == 200:
                 data = response.json()
+                _log.info('Received custom schedule data: %s items', len(data) if isinstance(data, list) else 'unknown format')
                 _log.debug('Received custom schedule data: %s', data)
                 
                 # Handle different response formats
@@ -3879,12 +4245,11 @@ class ScheduleWindow(ArtisanResizeablDialog): # pyright:ignore[reportGeneralType
                     _log.warning('Unexpected custom schedule data format: %s', type(data))
                     return None
             else:
-                _log.error('Failed to fetch custom schedule data: status %s', response.status_code)
+                _log.error('Failed to fetch custom schedule data: status %s, response: %s', response.status_code, response.text[:200])
                 return None
         except Exception as e:  # pylint: disable=broad-except
             _log.exception('Error fetching custom schedule data: %s', e)
             return None
-
     def mergeCustomDataIntoSchedule(self, custom_data: List[Dict[str, Any]]) -> None:
         """Merge custom JSON data into existing scheduled items"""
         _log.debug('mergeCustomDataIntoSchedule()')

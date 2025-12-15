@@ -146,6 +146,7 @@ nickname: Optional[str] = None
 
 custom_schedule_url: Optional[str] = None  # URL to fetch custom schedule JSON
 custom_schedule_action_url: Optional[str] = None  # URL to send custom actions
+custom_schedule_requires_auth: bool = True  # Whether custom schedule endpoint requires authentication
 
 # Load custom schedule URL from settings
 def load_custom_schedule_url() -> None:
@@ -177,3 +178,23 @@ def save_custom_schedule_url(url: Optional[str]) -> None:
 
 # Load on module import
 load_custom_schedule_url()
+
+def load_custom_schedule_auth() -> bool:
+    """Load custom schedule auth requirement from QSettings"""
+    try:
+        from PyQt6.QtCore import QSettings
+    except ImportError:
+        from PyQt5.QtCore import QSettings  # type: ignore
+    settings = QSettings()
+    return settings.value('Plus/CustomScheduleRequiresAuth', False, type=bool)
+
+def save_custom_schedule_auth(requires_auth: bool) -> None:
+    """Save custom schedule auth requirement to QSettings"""
+    try:
+        from PyQt6.QtCore import QSettings
+    except ImportError:
+        from PyQt5.QtCore import QSettings  # type: ignore
+    settings = QSettings()
+    settings.setValue('Plus/CustomScheduleRequiresAuth', requires_auth)
+
+custom_schedule_requires_auth = load_custom_schedule_auth()
