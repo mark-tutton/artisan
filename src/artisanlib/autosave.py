@@ -22,12 +22,12 @@ import logging
 try:
     from PyQt6.QtCore import Qt, pyqtSlot, QSettings # @UnusedImport @Reimport  @UnresolvedImport
     from PyQt6.QtWidgets import (QApplication, QLabel, QPushButton, QDialogButtonBox,  # @UnusedImport @Reimport  @UnresolvedImport
-        QComboBox, QHBoxLayout, QVBoxLayout, QCheckBox, QGridLayout, QLineEdit) # @UnusedImport @Reimport  @UnresolvedImport
+        QComboBox, QHBoxLayout, QVBoxLayout, QCheckBox, QGridLayout, QLineEdit, QScrollArea, QWidget) # @UnusedImport @Reimport  @UnresolvedImport
     from PyQt6.QtGui import QStandardItemModel # @UnusedImport @Reimport  @UnresolvedImport
 except ImportError:
     from PyQt5.QtCore import Qt, pyqtSlot, QSettings # type: ignore # @UnusedImport @Reimport  @UnresolvedImport
     from PyQt5.QtWidgets import (QApplication, QLabel, QPushButton, QDialogButtonBox, # type: ignore # @UnusedImport @Reimport  @UnresolvedImport
-        QComboBox, QHBoxLayout, QVBoxLayout, QCheckBox, QGridLayout, QLineEdit) # @UnusedImport @Reimport  @UnresolvedImport
+        QComboBox, QHBoxLayout, QVBoxLayout, QCheckBox, QGridLayout, QLineEdit, QScrollArea, QWidget) # @UnusedImport @Reimport  @UnresolvedImport
     from PyQt5.QtGui import QStandardItemModel # type: ignore # @UnusedImport @Reimport  @UnresolvedImport
 
 
@@ -214,12 +214,26 @@ class autosaveDlg(ArtisanDialog):
         autolayout.setColumnStretch(0,0)
         autolayout.setColumnStretch(1,10)
         autolayout.setColumnStretch(2,0)
+
+        # mainLayout = QVBoxLayout()
+        # mainLayout.addLayout(autolayout)
+        # mainLayout.addStretch()
+        # mainLayout.addSpacing(10)
+        # mainLayout.addLayout(buttonLayout)
+        # self.setLayout(mainLayout)
+
+        content_widget = QWidget(self)
+        content_widget.setLayout(autolayout)
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setWidget(content_widget)
         mainLayout = QVBoxLayout()
-        mainLayout.addLayout(autolayout)
-        mainLayout.addStretch()
+        mainLayout.addWidget(scroll)
         mainLayout.addSpacing(10)
         mainLayout.addLayout(buttonLayout)
         self.setLayout(mainLayout)
+
         okButton: Optional[QPushButton] = self.dialogbuttons.button(QDialogButtonBox.StandardButton.Ok)
         if okButton is not None:
             okButton.setFocus()
