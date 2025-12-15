@@ -11961,6 +11961,13 @@ class tgraphcanvas(FigureCanvas):
             if len(statstr) > 1 and statstr[0] == newline:
                 statstr = statstr[1:]
 
+             # Always append operator and UUID if available
+            if self.operator and self.operator.strip():
+                statstr += f"{newline}{QApplication.translate('Label', 'Operator')}: {self.operator.strip()}"
+            if self.roastUUID:
+                statstr += f"{newline}{QApplication.translate('Label', 'Roast UUID')}: {self.roastUUID}"
+
+
             if txt:
                 return statstr
 
@@ -14093,6 +14100,14 @@ class tgraphcanvas(FigureCanvas):
                     self.aw.clusterEvents()
             except Exception as e: # pylint: disable=broad-except
                 _log.exception(e)
+
+            # After recording stops, notify plugins that roast has ended
+            if hasattr(self.aw, 'plugin_manager') and self.aw.plugin_manager:
+                try:
+                    self.aw.plugin_manager.notify_roast_end()
+                except Exception as e:
+                    _log.error(f"Failed to notify plugins of roast end: {e}")
+        
 
              # DEBUG: Check autosave conditions
             _log.error("AUTOSAVE DEBUG - ToggleRecorder autosave check:")

@@ -794,6 +794,52 @@ def create_server_upload_widgets(aw):
     layout.addWidget(statusIndicator)
     layout.addWidget(refreshButton)
 
+    # Statistics auto-save section
+    statsGroupBox = QGroupBox(QApplication.translate("GroupBox", "Statistics Auto-Save"))
+    statsLayout = QVBoxLayout()
+    
+    autoSaveStatsCheckbox = QCheckBox(
+        QApplication.translate("CheckBox", "Auto-save statistics summary on roast end")
+    )
+    autoSaveStatsCheckbox.setChecked(_config.auto_save_statistics_on_roast_end)
+    
+    formatLabel = QLabel(QApplication.translate("Label", "Format:"))
+    formatComboBox = QComboBox()
+    formatComboBox.addItems(["text", "pdf", "both"])
+    formatIndex = formatComboBox.findText(_config.auto_save_statistics_format)
+    if formatIndex >= 0:
+        formatComboBox.setCurrentIndex(formatIndex)
+    
+    pathLabel = QLabel(QApplication.translate("Label", "Save Path (empty = use autosave path):"))
+    statsPathEdit = QLineEdit(_config.auto_save_statistics_path)
+    statsPathButton = QPushButton(QApplication.translate("Button", "Browse..."))
+    
+    def on_stats_path_browse():
+        """Browse for statistics save path"""
+        path = aw.ArtisanExistingDirectoryDialog(
+            msg=QApplication.translate("Form Caption", "Statistics Auto-Save Path")
+        )
+        if path:
+            statsPathEdit.setText(path)
+    
+    statsPathButton.clicked.connect(on_stats_path_browse)
+
+    autoPrintStatsCheckbox = QCheckBox(
+        QApplication.translate("CheckBox", "Auto-print statistics PDF when created")
+    )
+    autoPrintStatsCheckbox.setChecked(_config.auto_print_statistics_pdf)
+    
+    statsLayout.addWidget(autoSaveStatsCheckbox)
+    statsLayout.addWidget(formatLabel)
+    statsLayout.addWidget(formatComboBox)
+    statsLayout.addWidget(autoPrintStatsCheckbox)
+    statsLayout.addWidget(pathLabel)
+    statsLayout.addWidget(statsPathEdit)
+    statsLayout.addWidget(statsPathButton)
+    
+    statsGroupBox.setLayout(statsLayout)
+    layout.addWidget(statsGroupBox)
+
     group_box.setLayout(layout)
 
     # Store references
@@ -806,6 +852,10 @@ def create_server_upload_widgets(aw):
     group_box.retryEdit = retryEdit
     group_box.statusIndicator = statusIndicator
     group_box.refreshButton = refreshButton
+    group_box.autoSaveStatsCheckbox = autoSaveStatsCheckbox
+    group_box.statsFormatComboBox = formatComboBox
+    group_box.autoPrintStatsCheckbox = autoPrintStatsCheckbox
+    group_box.statsPathEdit = statsPathEdit
 
     def cleanup_connections():
         try:
@@ -867,7 +917,6 @@ def create_additional_format_widgets(aw, format_number):
 
     return autopdfcheckbox, autopdflabel, imageTypesComboBox, pathButton, pathEdit
 
-
 def save_widget_values_to_config(
     uploadGroupBox,
     autopdfcheckbox2,
@@ -899,6 +948,14 @@ def save_widget_values_to_config(
         _config.autosave_pdf_3 = autopdfcheckbox3.isChecked()
         _config.autosave_image_type_3 = imageTypesComboBox3.currentText()
         _config.autosave_path_3 = pathEdit3.text()
+    
+    # Save statistics auto-save settings
+    if hasattr(uploadGroupBox, 'autoSaveStatsCheckbox'):
+        _config.auto_save_statistics_on_roast_end = uploadGroupBox.autoSaveStatsCheckbox.isChecked()
+        _config.auto_save_statistics_format = uploadGroupBox.statsFormatComboBox.currentText()
+        if hasattr(uploadGroupBox, 'autoPrintStatsCheckbox'):
+            _config.auto_print_statistics_pdf = uploadGroupBox.autoPrintStatsCheckbox.isChecked()
+        _config.auto_save_statistics_path = uploadGroupBox.statsPathEdit.text()
 
     # Save to file
     return save_config()

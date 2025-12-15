@@ -46,6 +46,12 @@ class AutosaveAddonConfig:
     # more settings
     enabled: bool = True
     auto_save_on_roast_end: bool = True
+
+    # Auto-save statistics settings
+    auto_save_statistics_on_roast_end: bool = True
+    auto_save_statistics_format: str = "text"  # "pdf", "text", or "both"
+    auto_save_statistics_path: str = ""  # Directory to save (empty = use autosave path)
+    auto_print_statistics_pdf: bool = False  # Auto-print PDF when created
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert config to dictionary"""
@@ -73,7 +79,11 @@ class AutosaveAddonConfig:
             "autosave_health_check_enabled": self.autosave_health_check_enabled,
             "autosave_health_check_interval": self.autosave_health_check_interval,
             "enabled": self.enabled,
-            "auto_save_on_roast_end": self.auto_save_on_roast_end
+            "auto_save_on_roast_end": self.auto_save_on_roast_end,
+            
+            "auto_save_statistics_on_roast_end": self.auto_save_statistics_on_roast_end,
+            "auto_save_statistics_format": self.auto_save_statistics_format,
+            "auto_save_statistics_path": self.auto_save_statistics_path
         }
     
     @classmethod
