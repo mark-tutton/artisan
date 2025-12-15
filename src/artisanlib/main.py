@@ -18343,46 +18343,132 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
     #         return cast('ProfileData', ast.literal_eval(r.text))
     #     except Exception: # pylint: disable=broad-except
     #         return None
-    def artisanURLextractor(url:QUrl,
-        _etypesdefault:List[str],
-        _alt_etypesdefault:List[str],
-        _artisanflavordefaultlabels:List[str],
-        _artisanURLextractor:Callable[[int],float]) -> Optional['ProfileData']:
+
+    # def artisanURLextractor(url:QUrl,
+    #     _etypesdefault:List[str],
+    #     _alt_etypesdefault:List[str],
+    #     _artisanflavordefaultlabels:List[str],
+    #     _artisanURLextractor:Callable[[int],float]) -> Optional['ProfileData']:
+    #     try:
+    #         import requests
+    #         _log.debug(f"DEBUG: Fetching URL: {url.toString()}")
+    #         r = requests.get(url.toString(),
+    #             allow_redirects=True,
+    #             timeout=(4, 15),
+    #             headers={'Accept-Encoding' : 'gzip'},
+    #             )
+    #         _log.debug(f"DEBUG: Response status: {r.status_code}")
+    #         _log.debug(f"DEBUG: Response content type: {r.headers.get('content-type')}")
+    #         _log.debug(f"DEBUG: Response length: {len(r.text)}")
+    #         _log.debug(f"DEBUG: First 200 chars: {r.text[:200]}")
+            
+    #         # Check if response is valid
+    #         if r.status_code != 200:
+    #             _log.debug(f"DEBUG: HTTP error: {r.status_code}")
+    #             return None
+                
+    #         if not r.text.strip():
+    #             _log.debug(f"DEBUG: Empty response")
+    #             return None
+            
+    #         result = cast('ProfileData', ast.literal_eval(r.text))
+    #         _log.debug(f"DEBUG: Successfully parsed data with keys: {list(result.keys()) if result else 'None'}")
+    #         return result
+    #     except requests.exceptions.RequestException as e:
+    #         _log.debug(f"DEBUG: Request error: {e}")
+    #         return None
+    #     except ast.SyntaxError as e:
+    #         _log.debug(f"DEBUG: Syntax error in Python literal: {e}")
+    #         _log.debug(f"DEBUG: Problematic text around error: {r.text[max(0, e.offset-50):e.offset+50] if 'r' in locals() else 'N/A'}")
+    #         return None
+    #     except Exception as e:
+    #         _log.debug(f"DEBUG: Unexpected error: {e}")
+    #         _log.debug(f"DEBUG: Error type: {type(e).__name__}")
+    #         import traceback
+    #         _log.debug(f"DEBUG: Full traceback:\n{traceback.format_exc()}")
+    #         return None
+
+    def artisanURLextractor(
+        url: QUrl,
+        _etypesdefault: List[str],
+        _alt_etypesdefault: List[str],
+        _artisanflavordefaultlabels: List[str],
+        _artisanURLextractor: Callable[[int], float],
+    ) -> Optional["ProfileData"]:
         try:
             import requests
-            _log.debug(f"DEBUG: Fetching URL: {url.toString()}")
-            r = requests.get(url.toString(),
+            import ast
+            import json
+
+            raw_url = url.toString()
+            _log.debug(f"DEBUG: Fetching URL: {raw_url}")
+            r = requests.get(
+                raw_url,
                 allow_redirects=True,
                 timeout=(4, 15),
-                headers={'Accept-Encoding' : 'gzip'},
-                )
+                headers={"Accept-Encoding": "gzip"},
+            )
             _log.debug(f"DEBUG: Response status: {r.status_code}")
             _log.debug(f"DEBUG: Response content type: {r.headers.get('content-type')}")
             _log.debug(f"DEBUG: Response length: {len(r.text)}")
             _log.debug(f"DEBUG: First 200 chars: {r.text[:200]}")
-            
-            # Check if response is valid
+
             if r.status_code != 200:
                 _log.debug(f"DEBUG: HTTP error: {r.status_code}")
                 return None
-                
+
             if not r.text.strip():
-                _log.debug(f"DEBUG: Empty response")
+                _log.debug("DEBUG: Empty response")
                 return None
-            
-            result = cast('ProfileData', ast.literal_eval(r.text))
-            _log.debug(f"DEBUG: Successfully parsed data with keys: {list(result.keys()) if result else 'None'}")
+
+            body = r.text
+
+            # If this looks like JSON with a `url` field, follow it to get the actual profile
+            content_type = (r.headers.get("content-type") or "").lower()
+            download_url = None
+            if "application/json" in content_type or body.lstrip().startswith(("{", "[")):
+                try:
+                    data = json.loads(body)
+                    download_url = data.get("url") or data.get("signedUrl")
+                    _log.debug(f"DEBUG: Parsed JSON download URL: {download_url}")
+                except Exception as e:
+                    _log.debug(f"DEBUG: JSON parse error in artisanURLextractor: {e}")
+
+            if download_url:
+                _log.debug(f"DEBUG: Following profile download URL: {download_url}")
+                r2 = requests.get(
+                    download_url,
+                    allow_redirects=True,
+                    timeout=(4, 15),
+                    headers={"Accept-Encoding": "gzip"},
+                )
+                _log.debug(f"DEBUG: Download response status: {r2.status_code}")
+                if r2.status_code != 200 or not r2.text.strip():
+                    _log.debug(
+                        f"DEBUG: Failed to download profile from signed URL (status={r2.status_code})"
+                    )
+                    return None
+                body = r2.text
+
+            # At this point `body` should be the Python-literal .alog content
+            result = cast("ProfileData", ast.literal_eval(body))
+            _log.debug(
+                f"DEBUG: Successfully parsed data with keys: {list(result.keys()) if result else 'None'}"
+            )
             return result
+
         except requests.exceptions.RequestException as e:
-            _log.debug(f"DEBUG: Request error: {e}")
+            _log.debug(f"DEBUG: Request error in artisanURLextractor: {e}")
             return None
         except ast.SyntaxError as e:
             _log.debug(f"DEBUG: Syntax error in Python literal: {e}")
-            _log.debug(f"DEBUG: Problematic text around error: {r.text[max(0, e.offset-50):e.offset+50] if 'r' in locals() else 'N/A'}")
+            _log.debug(
+                "DEBUG: Problematic text around error: "
+                f"{body[max(0, getattr(e, 'offset', 0) - 50): getattr(e, 'offset', 0) + 50] if 'body' in locals() else 'N/A'}"
+            )
             return None
         except Exception as e:
-            _log.debug(f"DEBUG: Unexpected error: {e}")
-            _log.debug(f"DEBUG: Error type: {type(e).__name__}")
+            _log.debug(f"DEBUG: Unexpected error in artisanURLextractor: {e}")
             import traceback
             _log.debug(f"DEBUG: Full traceback:\n{traceback.format_exc()}")
             return None

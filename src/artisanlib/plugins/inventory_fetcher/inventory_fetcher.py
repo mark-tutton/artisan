@@ -341,28 +341,27 @@ class InventoryFetcher:
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
+
+
     def _get_auth_headers(self) -> Dict[str, str]:
         """Get authentication headers from global auth manager"""
-        headers = {}
-        
+        headers: Dict[str, str] = {}
+
         _log.debug("=== AUTH HEADERS DEBUG ===")
         _log.debug(f"Auth manager available: {self.auth_manager is not None}")
-        
+
         if self.auth_manager:
-            _log.debug(f"Auth manager authenticated: {self.auth_manager.is_authenticated()}")
-            token = self.auth_manager.get_valid_token()
-            _log.debug(f"Valid token available: {token is not None}")
-            if token:
-                _log.debug(f"Token length: {len(token)}")
-                headers["Authorization"] = f"Bearer {token}"
-                _log.debug(f"Authorization header set: Bearer {token[:20]}...")
-            else:
-                _log.debug("No valid token available")
+            try:
+                # Delegate to GlobalAuthManager so API key vs OAuth is handled correctly
+                headers = self.auth_manager.get_auth_headers()
+                _log.debug(f"Auth headers from GlobalAuthManager: {headers}")
+            except Exception as e:
+                _log.error(f"Error getting auth headers from GlobalAuthManager: {e}", exc_info=True)
         else:
             _log.debug("No auth manager available")
-        
+
         _log.debug(f"Final headers: {headers}")
         _log.debug("==========================")
-        
-        return headers 
+
+        return headers
 

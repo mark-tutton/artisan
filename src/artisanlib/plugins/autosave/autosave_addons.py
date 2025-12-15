@@ -170,7 +170,11 @@ class ServerHealthChecker(QObject):
                             self.health_status_changed.emit(False)
                         _log.warning(f"Server reports unhealthy status: {server_status}")
                 except (ValueError, KeyError) as e:
-                    _log.warning(f"Could not parse health response: {e}")
+                    _log.warning(
+                        "Could not parse health response as JSON: %s; body=%r",
+                        e,
+                        response.text,
+                    )
                     was_healthy = self.is_healthy
                     self.is_healthy = True
                     if not was_healthy:

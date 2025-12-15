@@ -69,6 +69,8 @@ class LiveBroadcastSignals(QObject):
     room_member_left = pyqtSignal(dict)    # member_data
     room_message = pyqtSignal(dict)        # message_data
 
+    menu_update_requested = pyqtSignal()
+
 class LiveBroadcastPlugin(PluginBase):
     @property
     def name(self) -> str:
@@ -90,6 +92,9 @@ class LiveBroadcastPlugin(PluginBase):
         # Core components
         self.signals = LiveBroadcastSignals()
         self.config = LiveBroadcastConfig()
+
+        # connect menu update to run in the plugin's (GUI) thread
+        self.signals.menu_update_requested.connect(self._update_broadcast_menu_actions)
 
         # Load saved configuration
         try:
@@ -609,7 +614,7 @@ class LiveBroadcastPlugin(PluginBase):
 
             if not SOCKETIO_AVAILABLE:
                 # Show warning if socketio is not available
-                warning_action = QAction("⚠️ socketio library required", menu)
+                warning_action = QAction(" socketio library required", menu)
                 warning_action.setEnabled(False)
                 menu.addAction(warning_action)
 
@@ -627,6 +632,10 @@ class LiveBroadcastPlugin(PluginBase):
             self.stop_action = QAction("Stop Broadcasting", menu)
             self.stop_action.triggered.connect(self._stop_broadcaster)
             menu.addAction(self.stop_action)
+
+            # make the menu reflect current state right away
+            self._update_broadcast_menu_actions()
+
 
             menu.addSeparator()
 
@@ -686,6 +695,23 @@ class LiveBroadcastPlugin(PluginBase):
         except Exception as e:
             self._record_error("MenuCreationError", str(e))
             return None
+
+    def _update_broadcast_menu_actions(self) -> None:
+        """Show Start/Stop according to current broadcast state."""
+        try:
+            if not hasattr(self, "start_action") or not hasattr(self, "stop_action"):
+                return
+
+            is_active = self.broadcast_state in (
+                BroadcastState.CONNECTED,
+                BroadcastState.CONNECTING,
+                BroadcastState.RECONNECTING,
+            )
+
+            self.start_action.setVisible(not is_active)
+            self.stop_action.setVisible(is_active)
+        except Exception as e:
+            self._record_error("MenuUpdateError", str(e))
 
     def _on_roast_start_impl(self) -> None:
         """Handle roast start"""
@@ -2103,6 +2129,13 @@ class LiveBroadcastPlugin(PluginBase):
             self.broadcast_state = new_state
             self.logger.info(f"Broadcast state changed: {old_state.value} -> {new_state.value}")
             self.signals.broadcast_state_changed.emit(new_state.value)
+
+            # Request a menu update on the GUI thread
+            try:
+                self.signals.menu_update_requested.emit()
+            except Exception as inner_e:
+                self._record_error("MenuUpdateSignalError", str(inner_e))
+
         except Exception as e:
             self._record_error("BroadcastStateChangeError", str(e))
 

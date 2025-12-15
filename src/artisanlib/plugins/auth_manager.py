@@ -238,15 +238,40 @@ class GlobalAuthManager(QObject):
             gateway_url = self.auth_base_url.replace('/auth', '')
             
             # Verify API key with backend
+            url = f"{gateway_url}/api/api-keys/verify"
+            _log.debug(f"Verifying API key at: {url}")
             response = requests.post(
-                f"{gateway_url}/api/api-keys/verify",
+                url,
                 headers={"X-API-Key": api_key},
                 json={"apiKey": api_key},
-                timeout=10
+                timeout=10,
+            )
+
+            _log.debug(
+                "API key verify response status=%s, body=%r",
+                response.status_code,
+                response.text[:500],
             )
             
             if response.status_code == 200:
-                data = response.json()
+                try:
+                    data = response.json()
+                except ValueError as e:
+                    _log.error(
+                        "Failed to parse API key verify JSON: %s; body=%r",
+                        e,
+                        response.text,
+                    )
+                    self._safe_emit(self.login_failed, "Invalid JSON response from auth server")
+                    return False
+
+                # EXPECTED SHAPE:
+                # {
+                #   "success": true,
+                #   "valid": true,
+                #   "error": null | "message"
+                # }
+
                 if data.get('success') and data.get('valid'):
                     # Store API key
                     self.api_key = api_key
@@ -261,7 +286,16 @@ class GlobalAuthManager(QObject):
                     self._safe_emit(self.login_failed, error_msg)
                     return False
             else:
-                error_data = response.json() if response.content else {}
+                try: 
+                    error_data = response.json() if response.content else {}
+                except ValueError:
+                    _log.error(
+                        "Non‑JSON error from auth server; status=%s, body=%r",
+                        response.status_code,
+                        response.text,
+                    )
+                    error_data = {}
+
                 error_msg = error_data.get('error', f'HTTP {response.status_code}')
                 self._safe_emit(self.login_failed, error_msg)
                 return False

@@ -4230,11 +4230,26 @@ class ScheduleWindow(ArtisanResizeablDialog): # pyright:ignore[reportGeneralType
             
             _log.info('Response status: %s', response.status_code)
             if response.status_code == 200:
-                data = response.json()
-                _log.info('Received custom schedule data: %s items', len(data) if isinstance(data, list) else 'unknown format')
+                try:
+                    if not response.text.strip():
+                        _log.warning('Custom schedule endpoint returned empty body')
+                        return None
+
+                    data = response.json()
+                except ValueError as e:
+                    _log.error(
+                        'Failed to parse custom schedule JSON: %s; body=%r',
+                        e,
+                        response.text[:500],
+                    )
+                    return None
+
+                _log.info(
+                    'Received custom schedule data: %s items',
+                    len(data) if isinstance(data, list) else 'unknown format',
+                )
                 _log.debug('Received custom schedule data: %s', data)
-                
-                # Handle different response formats
+
                 if isinstance(data, list):
                     return data
                 elif isinstance(data, dict) and 'schedule' in data:
@@ -4245,7 +4260,11 @@ class ScheduleWindow(ArtisanResizeablDialog): # pyright:ignore[reportGeneralType
                     _log.warning('Unexpected custom schedule data format: %s', type(data))
                     return None
             else:
-                _log.error('Failed to fetch custom schedule data: status %s, response: %s', response.status_code, response.text[:200])
+                _log.error(
+                    'Failed to fetch custom schedule data: status %s, response: %s',
+                    response.status_code,
+                    response.text[:200],
+                )
                 return None
         except Exception as e:  # pylint: disable=broad-except
             _log.exception('Error fetching custom schedule data: %s', e)
