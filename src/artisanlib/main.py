@@ -1108,7 +1108,7 @@ class VMToolbar(NavigationToolbar): # pylint: disable=abstract-method
             self.auth_button = QPushButton("Login")
             self.auth_button.setToolTip("Login to Artisan")
             self.auth_button.setMaximumSize(80, 24)
-            self.auth_button.setStyleSheet("font-size: 10px; margin: 2px; padding: 2px; border-radius: 3px;")
+            self.auth_button.setStyleSheet("font-size: 10px; margin: 2px; padding: 2px; border-radius: 3px; color: #333;")
             self.auth_button.clicked.connect(self._handle_auth_action)
             self.addWidget(self.auth_button)
             
@@ -1328,34 +1328,72 @@ class VMToolbar(NavigationToolbar): # pylint: disable=abstract-method
             from .plugins.manager import PluginManager
             from .plugins.autosave.autosave_addons import get_health_checker
             from .plugins.live_broadcast_plugin.get_plugin_status import get_broadcaster_status
+            from PyQt6.QtWidgets import QWidget
+            from PyQt6.QtGui import QPainter, QColor
+            from PyQt6.QtCore import Qt
+            
+            # Custom widget for status dots
+            class StatusDot(QWidget):
+                def __init__(self, parent=None):
+                    super().__init__(parent)
+                    self.setFixedSize(12, 12)
+                    self._color = QColor("#dc3545")  # Default red
+                
+                def set_color(self, color):
+                    """Set the dot color (hex string or QColor)"""
+                    if isinstance(color, str):
+                        self._color = QColor(color)
+                    else:
+                        self._color = color
+                    self.update()
+                
+                def paintEvent(self, event):
+                    painter = QPainter(self)
+                    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                    painter.setBrush(self._color)
+                    painter.setPen(Qt.PenStyle.NoPen)
+                    painter.drawEllipse(1, 1, 10, 10)
             
             # Plugin Status Label
             self.plugin_status_label = QLabel("Plugins:")
             self.plugin_status_label.setStyleSheet("color: #666; font-size: 10px; margin: 2px;")
             self.addWidget(self.plugin_status_label)
             
-            # Autosave Plugin Status
-            self.autosave_status = QLabel("Autosave")
+            # Autosave Plugin Status - Text Label
+            self.autosave_label = QLabel("Autosave")
+            self.autosave_label.setStyleSheet("color: #666; font-size: 10px; margin: 2px;")
+            self.addWidget(self.autosave_label)
+            
+            # Autosave Plugin Status - Dot Indicator
+            self.autosave_status = StatusDot()
             self.autosave_status.setToolTip("Autosave Plugin Status")
-            self.autosave_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px;")
             self.addWidget(self.autosave_status)
             
-            # Live Broadcast Plugin Status
-            self.broadcast_status = QLabel("Broadcast")
+            # Live Broadcast Plugin Status - Text Label
+            self.broadcast_label = QLabel("Broadcast")
+            self.broadcast_label.setStyleSheet("color: #666; font-size: 10px; margin: 2px;")
+            self.addWidget(self.broadcast_label)
+            
+            # Live Broadcast Plugin Status - Dot Indicator
+            self.broadcast_status = StatusDot()
             self.broadcast_status.setToolTip("Live Broadcast Plugin Status")
-            self.broadcast_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px;")
             self.addWidget(self.broadcast_status)
             
-            # Inventory Fetcher Plugin Status
-            self.inventory_status = QLabel("Inventory")
+            # Inventory Fetcher Plugin Status - Text Label
+            self.inventory_label = QLabel("Inventory")
+            self.inventory_label.setStyleSheet("color: #666; font-size: 10px; margin: 2px;")
+            self.addWidget(self.inventory_label)
+            
+            # Inventory Fetcher Plugin Status - Dot Indicator
+            self.inventory_status = StatusDot()
             self.inventory_status.setToolTip("Inventory Fetcher Plugin Status")
-            self.inventory_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px;")
             self.addWidget(self.inventory_status)
             
             # Refresh Button
-            self.refresh_plugins_btn = QPushButton("♻️")
+            self.refresh_plugins_btn = QPushButton("Refresh")
             self.refresh_plugins_btn.setToolTip("Refresh Plugin Status")
-            self.refresh_plugins_btn.setMaximumSize(24, 24)
+            self.refresh_plugins_btn.setMaximumSize(60, 24)
+            self.refresh_plugins_btn.setStyleSheet("font-size: 10px; margin: 2px; padding: 2px; border-radius: 3px; color: #333;")
             self.refresh_plugins_btn.clicked.connect(self._refresh_plugin_status)
             self.addWidget(self.refresh_plugins_btn)
             
@@ -1412,24 +1450,21 @@ class VMToolbar(NavigationToolbar): # pylint: disable=abstract-method
         try:
             # Check if plugin manager exists and is accessible - simple check without exceptions
             if not hasattr(self, 'plugin_manager'):
-                self.autosave_status.setText("🏦❓")
+                self.autosave_status.set_color("#dc3545")  # Red
                 self.autosave_status.setToolTip("Autosave: Plugin Manager Not Available (not initialized)")
-                self.autosave_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #fff3cd; color: #856404;")
                 _log.debug("Plugin manager attribute not found in _update_autosave_status")
                 return
             
             if self.plugin_manager is None:
-                self.autosave_status.setText("🏦❓")
+                self.autosave_status.set_color("#dc3545")  # Red
                 self.autosave_status.setToolTip("Autosave: Plugin Manager Not Available (is None)")
-                self.autosave_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #fff3cd; color: #856404;")
                 _log.debug("Plugin manager is None in _update_autosave_status")
                 return
             
             # Try to access plugins to ensure it's fully initialized
             if not hasattr(self.plugin_manager, 'plugins'):
-                self.autosave_status.setText("🏦❓")
+                self.autosave_status.set_color("#dc3545")  # Red
                 self.autosave_status.setToolTip("Autosave: Plugin Manager Not Fully Initialized")
-                self.autosave_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #fff3cd; color: #856404;")
                 _log.debug("Plugin manager.plugins attribute not found")
                 return
             
@@ -1449,17 +1484,15 @@ class VMToolbar(NavigationToolbar): # pylint: disable=abstract-method
             
             # Check if plugin exists and is at least initialized (not just active)
             if plugin is None:
-                self.autosave_status.setText("🏦❓")
+                self.autosave_status.set_color("#dc3545")  # Red
                 self.autosave_status.setToolTip("Autosave: Plugin Not Found")
-                self.autosave_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #fff3cd; color: #856404;")
                 return
             
             # Check plugin state - allow INITIALIZING or ACTIVE
             from .plugins.base import PluginState
             if plugin.state not in [PluginState.ACTIVE, PluginState.INITIALIZING]:
-                self.autosave_status.setText("🏦❓")
+                self.autosave_status.set_color("#dc3545")  # Red
                 self.autosave_status.setToolTip(f"Autosave: Plugin State - {plugin.state}")
-                self.autosave_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #fff3cd; color: #856404;")
                 return
             
             # Plugin is initialized, check health
@@ -1469,29 +1502,24 @@ class VMToolbar(NavigationToolbar): # pylint: disable=abstract-method
                 health_checker = get_health_checker()
                 if health_checker and hasattr(health_checker, 'is_healthy'):
                     if health_checker.is_healthy:
-                        self.autosave_status.setText("🏦✅")
+                        self.autosave_status.set_color("#28a745")  # Green
                         self.autosave_status.setToolTip("Autosave: Server Connected")
-                        self.autosave_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #d4edda; color: #155724;")
                     else:
-                        self.autosave_status.setText("🏦❌")
+                        self.autosave_status.set_color("#dc3545")  # Red
                         self.autosave_status.setToolTip("Autosave: Server Disconnected")
-                        self.autosave_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #f8d7da; color: #721c24;")
                 else:
-                    self.autosave_status.setText("🏦❓")
+                    self.autosave_status.set_color("#dc3545")  # Red
                     self.autosave_status.setToolTip("Autosave: Health Checker Not Available")
-                    self.autosave_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #fff3cd; color: #856404;")
             except Exception as e:
                 # Health checker might not be ready yet
                 _log.debug(f"Could not get health checker status: {e}")
-                self.autosave_status.setText("🏦❓")
+                self.autosave_status.set_color("#dc3545")  # Red
                 self.autosave_status.setToolTip(f"Autosave: Health Checker Error - {str(e)[:30]}")
-                self.autosave_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #fff3cd; color: #856404;")
                 
         except Exception as e:
             _log.error(f"Error updating autosave status: {e}", exc_info=True)
-            self.autosave_status.setText("🏦❓")
+            self.autosave_status.set_color("#dc3545")  # Red
             self.autosave_status.setToolTip(f"Autosave: Error - {str(e)[:50]}")
-            self.autosave_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #f8d7da; color: #721c24;")
     
     def _update_broadcast_status(self):
         """Update live broadcast plugin status"""
@@ -1501,22 +1529,18 @@ class VMToolbar(NavigationToolbar): # pylint: disable=abstract-method
             status = get_broadcaster_status()
             if status:
                 if status.get('is_connected', False):
-                    self.broadcast_status.setText("📡✅")
+                    self.broadcast_status.set_color("#28a745")  # Green
                     self.broadcast_status.setToolTip(f"Live Broadcast: Connected to {status.get('server_url', 'Unknown')}")
-                    self.broadcast_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #d4edda; color: #155724;")
                 else:
-                    self.broadcast_status.setText("📡❌")
+                    self.broadcast_status.set_color("#dc3545")  # Red
                     self.broadcast_status.setToolTip(f"Live Broadcast: Disconnected - {status.get('last_error', 'Unknown error')}")
-                    self.broadcast_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #f8d7da; color: #721c24;")
             else:
-                self.broadcast_status.setText("📡❓")
+                self.broadcast_status.set_color("#dc3545")  # Red
                 self.broadcast_status.setToolTip("Live Broadcast: Plugin Not Loaded")
-                self.broadcast_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #fff3cd; color: #856404;")
                 
         except Exception as e:
-            self.broadcast_status.setText("📡❓")
+            self.broadcast_status.set_color("#dc3545")  # Red
             self.broadcast_status.setToolTip(f"Live Broadcast: Error - {str(e)[:50]}")
-            self.broadcast_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #f8d7da; color: #721c24;")
     
 
     def _update_inventory_status(self):
@@ -1524,24 +1548,21 @@ class VMToolbar(NavigationToolbar): # pylint: disable=abstract-method
         try:
             # Check if plugin manager exists and is accessible - simple check without exceptions
             if not hasattr(self, 'plugin_manager'):
-                self.inventory_status.setText("📦❓")
+                self.inventory_status.set_color("#dc3545")  # Red
                 self.inventory_status.setToolTip("Inventory Fetcher: Plugin Manager Not Available (not initialized)")
-                self.inventory_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #fff3cd; color: #856404;")
                 _log.debug("Plugin manager attribute not found in _update_inventory_status")
                 return
             
             if self.plugin_manager is None:
-                self.inventory_status.setText("📦❓")
+                self.inventory_status.set_color("#dc3545")  # Red
                 self.inventory_status.setToolTip("Inventory Fetcher: Plugin Manager Not Available (is None)")
-                self.inventory_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #fff3cd; color: #856404;")
                 _log.debug("Plugin manager is None in _update_inventory_status")
                 return
             
             # Try to access plugins to ensure it's fully initialized
             if not hasattr(self.plugin_manager, 'plugins'):
-                self.inventory_status.setText("📦❓")
+                self.inventory_status.set_color("#dc3545")  # Red
                 self.inventory_status.setToolTip("Inventory Fetcher: Plugin Manager Not Fully Initialized")
-                self.inventory_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #fff3cd; color: #856404;")
                 _log.debug("Plugin manager.plugins attribute not found")
                 return
             
@@ -1561,17 +1582,15 @@ class VMToolbar(NavigationToolbar): # pylint: disable=abstract-method
             
             # Check if plugin exists and is at least initialized
             if plugin is None:
-                self.inventory_status.setText("📦❓")
+                self.inventory_status.set_color("#dc3545")  # Red
                 self.inventory_status.setToolTip("Inventory Fetcher: Plugin Not Found")
-                self.inventory_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #fff3cd; color: #856404;")
                 return
             
             # Check plugin state - allow INITIALIZING or ACTIVE
             from .plugins.base import PluginState
             if plugin.state not in [PluginState.ACTIVE, PluginState.INITIALIZING]:
-                self.inventory_status.setText("📦❓")
+                self.inventory_status.set_color("#dc3545")  # Red
                 self.inventory_status.setToolTip(f"Inventory Fetcher: Plugin State - {plugin.state}")
-                self.inventory_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #fff3cd; color: #856404;")
                 return
             
             # Plugin is initialized, try to get status
@@ -1590,30 +1609,24 @@ class VMToolbar(NavigationToolbar): # pylint: disable=abstract-method
                     # Check authentication status
                     auth_status = status.get('auth_status', 'unknown')
                     if auth_status in ['authenticated', 'jwt_valid', 'api_token', 'legacy_api_key']:
-                        self.inventory_status.setText("📦✅")
+                        self.inventory_status.set_color("#28a745")  # Green
                         self.inventory_status.setToolTip(f"Inventory Fetcher: Connected to {status.get('server_url', 'Unknown')} ({auth_status})")
-                        self.inventory_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #d4edda; color: #155724;")
                     else:
-                        self.inventory_status.setText("📦⚠️")
+                        self.inventory_status.set_color("#dc3545")  # Red
                         self.inventory_status.setToolTip(f"Inventory Fetcher: Connected but auth issue - {auth_status}")
-                        self.inventory_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #fff3cd; color: #856404;")
                 else:
-                    self.inventory_status.setText("📦❌")
+                    self.inventory_status.set_color("#dc3545")  # Red
                     error_msg = status.get('last_error', 'Unknown error')
                     self.inventory_status.setToolTip(f"Inventory Fetcher: Disconnected - {error_msg}")
-                    self.inventory_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #f8d7da; color: #721c24;")
             else:
                 # Plugin is initialized but status not available - show as initialized
-                self.inventory_status.setText("📦✅")
+                self.inventory_status.set_color("#28a745")  # Green
                 self.inventory_status.setToolTip("Inventory Fetcher: Plugin Initialized")
-                self.inventory_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #d4edda; color: #155724;")
                 
         except Exception as e:
             _log.error(f"Error updating inventory status: {e}", exc_info=True)
-            self.inventory_status.setText("📦❓")
+            self.inventory_status.set_color("#dc3545")  # Red
             self.inventory_status.setToolTip(f"Inventory Fetcher: Error - {str(e)[:50]}")
-            self.inventory_status.setStyleSheet("font-size: 14px; margin: 2px; padding: 2px; border-radius: 3px; background-color: #f8d7da; color: #721c24;")
-    
     def _refresh_plugin_status(self):
         """Manual refresh of plugin status"""
         try:
