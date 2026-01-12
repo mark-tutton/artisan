@@ -18327,67 +18327,6 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
             self.qmc.adderror((QApplication.translate('Error Message', 'Exception:') + ' fileImport(): {0}').format(str(ex)),getattr(exc_tb, 'tb_lineno', '?'))
 
     @staticmethod
-    # def artisanURLextractor(url:QUrl,
-    #         _etypesdefault:List[str],
-    #         _alt_etypesdefault:List[str],
-    #         _artisanflavordefaultlabels:List[str],
-    #         _artisanURLextractor:Callable[[int],float]) -> Optional['ProfileData']:
-    #     try:
-    #         import requests
-    #         r = requests.get(url.toString(),
-    #             allow_redirects=True,
-    #             timeout=(4, 15),
-    #             headers={'Accept-Encoding' : 'gzip'},
-    # #            verify=False
-    #             )
-    #         return cast('ProfileData', ast.literal_eval(r.text))
-    #     except Exception: # pylint: disable=broad-except
-    #         return None
-
-    # def artisanURLextractor(url:QUrl,
-    #     _etypesdefault:List[str],
-    #     _alt_etypesdefault:List[str],
-    #     _artisanflavordefaultlabels:List[str],
-    #     _artisanURLextractor:Callable[[int],float]) -> Optional['ProfileData']:
-    #     try:
-    #         import requests
-    #         _log.debug(f"DEBUG: Fetching URL: {url.toString()}")
-    #         r = requests.get(url.toString(),
-    #             allow_redirects=True,
-    #             timeout=(4, 15),
-    #             headers={'Accept-Encoding' : 'gzip'},
-    #             )
-    #         _log.debug(f"DEBUG: Response status: {r.status_code}")
-    #         _log.debug(f"DEBUG: Response content type: {r.headers.get('content-type')}")
-    #         _log.debug(f"DEBUG: Response length: {len(r.text)}")
-    #         _log.debug(f"DEBUG: First 200 chars: {r.text[:200]}")
-            
-    #         # Check if response is valid
-    #         if r.status_code != 200:
-    #             _log.debug(f"DEBUG: HTTP error: {r.status_code}")
-    #             return None
-                
-    #         if not r.text.strip():
-    #             _log.debug(f"DEBUG: Empty response")
-    #             return None
-            
-    #         result = cast('ProfileData', ast.literal_eval(r.text))
-    #         _log.debug(f"DEBUG: Successfully parsed data with keys: {list(result.keys()) if result else 'None'}")
-    #         return result
-    #     except requests.exceptions.RequestException as e:
-    #         _log.debug(f"DEBUG: Request error: {e}")
-    #         return None
-    #     except ast.SyntaxError as e:
-    #         _log.debug(f"DEBUG: Syntax error in Python literal: {e}")
-    #         _log.debug(f"DEBUG: Problematic text around error: {r.text[max(0, e.offset-50):e.offset+50] if 'r' in locals() else 'N/A'}")
-    #         return None
-    #     except Exception as e:
-    #         _log.debug(f"DEBUG: Unexpected error: {e}")
-    #         _log.debug(f"DEBUG: Error type: {type(e).__name__}")
-    #         import traceback
-    #         _log.debug(f"DEBUG: Full traceback:\n{traceback.format_exc()}")
-    #         return None
-
     def artisanURLextractor(
         url: QUrl,
         _etypesdefault: List[str],
@@ -18400,14 +18339,32 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
             import ast
             import json
 
+
+            # Get auth headers from GlobalAuthManager
+            auth_headers = {}
+            try:
+                from artisanlib.plugins.auth_manager import get_auth_manager
+                auth_manager = get_auth_manager()
+                if auth_manager:
+                    auth_headers = auth_manager.get_auth_headers()
+                    _log.debug(f"DEBUG: Using auth headers: {list(auth_headers.keys())}")
+            except Exception as e:
+                _log.debug(f"DEBUG: Could not get auth headers: {e}")
+
             raw_url = url.toString()
             _log.debug(f"DEBUG: Fetching URL: {raw_url}")
+            
+            # Combine headers
+            headers = {"Accept-Encoding": "gzip"}
+            headers.update(auth_headers)
+            
             r = requests.get(
                 raw_url,
                 allow_redirects=True,
                 timeout=(4, 15),
-                headers={"Accept-Encoding": "gzip"},
+                headers=headers,
             )
+
             _log.debug(f"DEBUG: Response status: {r.status_code}")
             _log.debug(f"DEBUG: Response content type: {r.headers.get('content-type')}")
             _log.debug(f"DEBUG: Response length: {len(r.text)}")
@@ -26571,9 +26528,8 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
     @pyqtSlot('QUrl')
     def importArtisanURLSlot(self, url:QUrl) -> None:
         self.importExternalURL(self.artisanURLextractor, url=url)
-
+    
     @pyqtSlot('QUrl')
- 
     def loadBackgroundURLSlot(self, url:QUrl) -> None:
         """Load a profile from URL as background template"""
         _log.debug(f"DEBUG: loadBackgroundURLSlot called with URL: {url.toString()}")
@@ -26582,12 +26538,28 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
             import os
             import requests
             
+            # Get auth headers from GlobalAuthManager
+            auth_headers = {}
+            try:
+                from artisanlib.plugins.auth_manager import get_auth_manager
+                auth_manager = get_auth_manager()
+                if auth_manager:
+                    auth_headers = auth_manager.get_auth_headers()
+                    _log.debug(f"DEBUG: Using auth headers for background profile: {list(auth_headers.keys())}")
+            except Exception as e:
+                _log.debug(f"DEBUG: Could not get auth headers: {e}")
+            
             # Download the profile data
             _log.debug("DEBUG: Downloading profile data from URL")
+            
+            # Combine headers
+            headers = {'Accept-Encoding' : 'gzip'}
+            headers.update(auth_headers)
+            
             response = requests.get(url.toString(),
                                 allow_redirects=True,
                                 timeout=(4, 15),
-                                headers={'Accept-Encoding' : 'gzip'})
+                                headers=headers)
             
             if response.status_code != 200:
                 _log.error(f"DEBUG: HTTP error {response.status_code} for URL: {url.toString()}")
@@ -26638,7 +26610,7 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
         except Exception as e:
             _log.error(f"DEBUG: Unexpected error: {e}")
             import traceback
-            _log.error(f"DEBUG: Full traceback: {traceback.format_exc()}")
+            _log.error(f"DEBUG: Full traceback:\n{traceback.format_exc()}")
             self.sendmessage(QApplication.translate('Message','Failed to load background profile: {0}').format(str(e)))
 
     def _cleanup_temp_file(self, temp_file_path: str) -> None:
