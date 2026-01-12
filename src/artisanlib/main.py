@@ -18339,7 +18339,6 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
             import ast
             import json
 
-
             # Get auth headers from GlobalAuthManager
             auth_headers = {}
             try:
@@ -18364,7 +18363,6 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
                 timeout=(4, 15),
                 headers=headers,
             )
-
             _log.debug(f"DEBUG: Response status: {r.status_code}")
             _log.debug(f"DEBUG: Response content type: {r.headers.get('content-type')}")
             _log.debug(f"DEBUG: Response length: {len(r.text)}")
@@ -18397,7 +18395,7 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
                     download_url,
                     allow_redirects=True,
                     timeout=(4, 15),
-                    headers={"Accept-Encoding": "gzip"},
+                    headers=headers,
                 )
                 _log.debug(f"DEBUG: Download response status: {r2.status_code}")
                 if r2.status_code != 200 or not r2.text.strip():
