@@ -52,6 +52,9 @@ class InventoryFetcherPlugin(ArtisanPlugin):
         self._fetch_in_progress = False
         self._last_fetch_time = 0
         self._fetch_interval = 300  # 5 minutes between fetches
+
+        # Store current selected bean data for profile saving
+        self._current_selected_bean_data: Optional[Dict[str, Any]] = None
         
         
     def initialize(self, main_window) -> None:
@@ -418,7 +421,34 @@ class InventoryFetcherPlugin(ArtisanPlugin):
         except Exception as e:
             self._record_error("PopulatePropertiesError", str(e))
             self.logger.error(f"Error populating roast properties: {e}")
-    
+
+
+    def get_current_selected_bean_data(self) -> Optional[Dict[str, Any]]:
+        """Get the currently selected bean data - tries stored data first, then combo box"""
+        try:
+            self.logger.error(f"DEBUG: get_current_selected_bean_data called, _current_selected_bean_data is {self._current_selected_bean_data is not None}")
+            # Try to get from stored data 
+            if self._current_selected_bean_data:
+                self.logger.error(f"DEBUG: Returning stored bean data: {self._current_selected_bean_data.get('name', 'Unknown') if self._current_selected_bean_data else 'None'}")
+                return self._current_selected_bean_data
+            
+            # Fallback: try to get from combo box if dialog is open
+            if self.roast_properties_dialog and hasattr(self.roast_properties_dialog, 'inventory_combo'):
+                combo = self.roast_properties_dialog.inventory_combo
+                bean_data = self.get_selected_bean(combo)
+                if bean_data:
+                    # Store it for future use
+                    self._current_selected_bean_data = bean_data
+                    self.logger.error(f"DEBUG: Retrieved bean data from combo box and stored: {bean_data.get('name', 'Unknown')}")
+                    return bean_data
+            
+            self.logger.error("DEBUG: No bean data found")
+            return None
+        except Exception as e:
+            self._record_error("GetCurrentBeanDataError", str(e))
+            self.logger.error(f"Error getting current selected bean data: {e}")
+            return None
+
     def show_about(self):
         """Show about dialog"""
         try:

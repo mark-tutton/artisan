@@ -264,6 +264,11 @@ def _handle_bean_selection_safe(roast_properties_dialog, inventory_plugin, index
     try:
         bean_data = inventory_plugin.get_selected_bean(roast_properties_dialog.inventory_combo)
         if bean_data:
+            # Store the full bean data in the plugin for profile saving
+            inventory_plugin._current_selected_bean_data = bean_data
+
+            _log.error(f"DEBUG: Stored bean data in plugin: name={bean_data.get('name', 'Unknown')}, id={bean_data.get('_id', 'Unknown')}, sku={bean_data.get('sku', 'Unknown')}")
+
             populate_fields_from_inventory(roast_properties_dialog, bean_data)
             mark_inventory_fields(roast_properties_dialog, True)
 

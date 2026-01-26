@@ -17792,6 +17792,51 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
                 _, _, exc_tb = sys.exc_info()
                 self.qmc.adderror((QApplication.translate('Error Message', 'Exception:') + ' getProfile(): {0}').format(str(ex)),getattr(exc_tb, 'tb_lineno', '?'))
 
+            
+            # Inventory plugin data
+            try:
+                _log.error("DEBUG: Starting inventory data retrieval in getProfile()")
+                # Try self.inventory_fetcher_plugin first (the instance where bean data is stored)
+                inventory_plugin = None
+                if hasattr(self, 'inventory_fetcher_plugin') and self.inventory_fetcher_plugin:
+                    inventory_plugin = self.inventory_fetcher_plugin
+                    _log.error("DEBUG: Using self.inventory_fetcher_plugin instance")
+                elif hasattr(self, 'plugin_manager') and self.plugin_manager:
+                    inventory_plugin = self.plugin_manager.get_plugin("Inventory Fetcher")
+                    _log.error("DEBUG: Using plugin manager instance")
+                
+                if inventory_plugin:
+                    _log.error("DEBUG: Inventory Fetcher plugin found")
+                    bean_data = inventory_plugin.get_current_selected_bean_data()
+                    _log.error(f"DEBUG: get_current_selected_bean_data returned: {bean_data is not None}")
+                    if bean_data:
+                        _log.error(f"DEBUG: Bean data name: {bean_data.get('name', 'Unknown')}, id: {bean_data.get('_id', 'Unknown')}")
+                        # Store basic inventory information
+                        profile['inventory_bean_id'] = encodeLocalStrict(str(bean_data.get('_id', '')))
+                        profile['inventory_bean_name'] = encodeLocalStrict(bean_data.get('name', ''))
+                        profile['inventory_bean_sku'] = encodeLocalStrict(bean_data.get('sku', ''))
+                        
+                        # Get bean size from current_details (preferred) or coffee_details (fallback)
+                        current_details = bean_data.get('current_details') or bean_data.get('coffee_details', {})
+                        bean_size_min = current_details.get('bean_size_min', 0)
+                        bean_size_max = current_details.get('bean_size_max', 0)
+                        
+                        profile['inventory_bean_size_min'] = str(int(bean_size_min)) if bean_size_min else ''
+                        profile['inventory_bean_size_max'] = str(int(bean_size_max)) if bean_size_max else ''
+                        _log.error(f"DEBUG: Inventory data saved to profile: name={profile.get('inventory_bean_name')}, id={profile.get('inventory_bean_id')}, sku={profile.get('inventory_bean_sku')}")
+                        _log.info(f"Inventory data saved to profile: {bean_data.get('name', 'Unknown')}")
+                    else:
+                        _log.error("DEBUG: No bean data available from inventory plugin")
+                        _log.debug("No bean data available from inventory plugin")
+                else:
+                    _log.error("DEBUG: Inventory Fetcher plugin not found")
+                    _log.debug("Inventory Fetcher plugin not found")
+            except Exception as ex: # pylint: disable=broad-except
+                _log.error(f"DEBUG: Exception in inventory data retrieval: {ex}")
+                _log.exception(ex)
+                _, _, exc_tb = sys.exc_info()
+                self.qmc.adderror((QApplication.translate('Error Message', 'Exception:') + ' getProfile() inventory: {0}').format(str(ex)),getattr(exc_tb, 'tb_lineno', '?'))
+
 
             return profile
         except Exception as ex: # pylint: disable=broad-except

@@ -322,6 +322,12 @@ class ProfileData(TypedDict, total=False):
     bbp_dropbt: float
     bbp_dropet: float
     bbp_drop_to_end: float
+    # Inventory plugin data
+    inventory_bean_id: str
+    inventory_bean_name: str
+    inventory_bean_sku: str
+    inventory_bean_size_min: str  
+    inventory_bean_size_max: str  
 
 class ExtraDeviceSettings(TypedDict):
     extradevices           : List[int]
