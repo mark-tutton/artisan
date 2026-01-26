@@ -57,6 +57,11 @@ class InventoryFetcherConfigDialog(QDialog):
         self.gateway_url_edit.setPlaceholderText("http://localhost:5101")
         gateway_layout.addRow("Gateway URL:", self.gateway_url_edit)
 
+        # Inventory endpoint field
+        self.inventory_endpoint_edit = QLineEdit(self.config.inventory_endpoint)
+        self.inventory_endpoint_edit.setPlaceholderText("/api/inventory/available/artisan")
+        gateway_layout.addRow("Inventory Endpoint:", self.inventory_endpoint_edit)
+
         gateway_group.setLayout(gateway_layout)
         layout.addWidget(gateway_group)
 
@@ -123,6 +128,7 @@ class InventoryFetcherConfigDialog(QDialog):
             test_config.gateway_url = self.gateway_url_edit.text()
             test_config.health_check_enabled = self.health_check_checkbox.isChecked()
             test_config.health_check_interval = self.health_interval_spin.value()
+            test_config.health_check_url = self.health_check_url_edit.text()
 
             fetcher = InventoryFetcher(test_config)
 
@@ -137,11 +143,12 @@ class InventoryFetcherConfigDialog(QDialog):
         """Save configuration and close dialog"""
         # Gateway settings
         self.config.gateway_url = self.gateway_url_edit.text()
+        self.config.inventory_endpoint = self.inventory_endpoint_edit.text()
         
         # Health check settings
         self.config.health_check_enabled = self.health_check_checkbox.isChecked()
         self.config.health_check_interval = self.health_interval_spin.value()
-        self.config.health_check_url = self.health_check_url_edit.text()  # Add this
+        self.config.health_check_url = self.health_check_url_edit.text() 
         
         # UI settings
         self.config.auto_fetch_on_startup = self.auto_fetch_checkbox.isChecked()

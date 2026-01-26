@@ -18,6 +18,9 @@ class InventoryFetcherConfig:
     health_check_enabled: bool = True
     health_check_interval: int = 300  # seconds (5 minutes)
     health_check_url: str = "/api/inventory/health"
+
+    # Inventory endpoint settings
+    inventory_endpoint: str = "/api/inventory/available/artisan"
     
     
     # UI settings
@@ -34,6 +37,7 @@ class InventoryFetcherConfig:
             "health_check_enabled": self.health_check_enabled,
             "health_check_interval": self.health_check_interval,
             "health_check_url": self.health_check_url,
+            "inventory_endpoint": self.inventory_endpoint,
             "auto_fetch_on_startup": self.auto_fetch_on_startup,
             "show_notifications": self.show_notifications,
         }
@@ -52,6 +56,10 @@ class InventoryFetcherConfig:
                 if not old_url.startswith(('http://', 'https://')):
                     old_url = f"http://{old_url}"
                 data['gateway_url'] = old_url
+        
+        # Set default inventory_endpoint if not present (backward compatibility)
+        if 'inventory_endpoint' not in data:
+            data['inventory_endpoint'] = "/api/inventory/available/artisan"
         
         return cls(**data)
     

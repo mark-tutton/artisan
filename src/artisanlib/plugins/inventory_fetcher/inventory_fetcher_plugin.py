@@ -338,10 +338,15 @@ class InventoryFetcherPlugin(ArtisanPlugin):
     def get_beans_data(self) -> List[Dict[str, Any]]:
         """Get current beans data"""
         return self.beans_data
-    
-    def populate_beans_combo(self, combo_box: QComboBox):
-        """Populate combo box with beans data"""
+
+    def populate_beans_combo(self, combo_box: QComboBox) -> bool:
+        """Populate combo box with beans data. Returns True if selection was restored."""
         try:
+            # Store the current selection before clearing
+            previously_selected_id = None
+            if self._current_selected_bean_data and '_id' in self._current_selected_bean_data:
+                previously_selected_id = self._current_selected_bean_data.get('_id')
+            
             combo_box.clear()
             combo_box.setPlaceholderText("Select/Search from inventory...")
             
@@ -355,11 +360,25 @@ class InventoryFetcherPlugin(ArtisanPlugin):
                 
             if hasattr(self.main_window, "addmessage"):
                 self.main_window.addmessage(f"DEBUG: Combo count after population: {combo_box.count()}")
+            
+            # Restore previous selection if it exists
+            selection_restored = False
+            if previously_selected_id:
+                for index in range(combo_box.count()):
+                    bean_data = combo_box.itemData(index)
+                    if bean_data and isinstance(bean_data, dict) and bean_data.get('_id') == previously_selected_id:
+                        combo_box.setCurrentIndex(index)
+                        self.logger.info(f"Restored selection to: {bean_data.get('name', 'Unknown')}")
+                        selection_restored = True
+                        break
+            
+            return selection_restored
                 
         except Exception as e:
             self._record_error("PopulateComboError", str(e))
             self.logger.error(f"Error populating combo box: {e}")
-    
+            return False
+
     def get_selected_bean(self, combo_box: QComboBox) -> Optional[Dict[str, Any]]:
         """Get selected bean data from combo box"""
         try:
@@ -427,20 +446,59 @@ class InventoryFetcherPlugin(ArtisanPlugin):
         """Get the currently selected bean data - tries stored data first, then combo box"""
         try:
             self.logger.error(f"DEBUG: get_current_selected_bean_data called, _current_selected_bean_data is {self._current_selected_bean_data is not None}")
-            # Try to get from stored data 
+            # Try to get data from stored data
             if self._current_selected_bean_data:
                 self.logger.error(f"DEBUG: Returning stored bean data: {self._current_selected_bean_data.get('name', 'Unknown') if self._current_selected_bean_data else 'None'}")
                 return self._current_selected_bean_data
             
-            # Fallback: try to get from combo box if dialog is open
-            if self.roast_properties_dialog and hasattr(self.roast_properties_dialog, 'inventory_combo'):
-                combo = self.roast_properties_dialog.inventory_combo
-                bean_data = self.get_selected_bean(combo)
-                if bean_data:
-                    # Store it for future use
-                    self._current_selected_bean_data = bean_data
-                    self.logger.error(f"DEBUG: Retrieved bean data from combo box and stored: {bean_data.get('name', 'Unknown')}")
-                    return bean_data
+            # Try to get data from combo box if dialog is open and objects are valid
+            if self.roast_properties_dialog:
+                try:
+                    # Check if dialog is deleted 
+                    try:
+                        import sip
+                        if sip.isdeleted(self.roast_properties_dialog):
+                            self.logger.debug("Roast properties dialog has been deleted")
+                            return None
+                    except (ImportError, AttributeError, Exception):
+                        # sip not available or not supported
+                        pass
+                    
+                    # Check if combo box exists
+                    if hasattr(self.roast_properties_dialog, 'inventory_combo'):
+                        try:
+                            combo = self.roast_properties_dialog.inventory_combo
+                            # Check if combo box is deleted
+                            try:
+                                import sip
+                                if sip.isdeleted(combo):
+                                    self.logger.debug("Inventory combo box has been deleted")
+                                    return None
+                            except (ImportError, AttributeError, Exception):
+                                pass
+                            
+                            # Try to access combo box to verify it's still valid
+                            # This will raise an exception if the object has been deleted
+                            _ = combo.currentIndex()  # Test access
+                            
+                            bean_data = self.get_selected_bean(combo)
+                            if bean_data:
+                                # Store it for future use
+                                self._current_selected_bean_data = bean_data
+                                self.logger.error(f"DEBUG: Retrieved bean data from combo box and stored: {bean_data.get('name', 'Unknown')}")
+                                return bean_data
+                        except (RuntimeError, AttributeError) as e:
+                            # Qt object has been deleted 
+                            error_msg = str(e)
+                            if "deleted" in error_msg.lower() or "wrapped" in error_msg.lower():
+                                self.logger.debug("Qt object has been deleted (dialog likely closed): %s", error_msg)
+                                return None
+                            # Re-raise if it's a different error
+                            raise
+                except Exception as e:
+                    # Catch any other errors when checking dialog/combo box
+                    self.logger.debug(f"Error accessing dialog or combo box: {e}")
+                    return None
             
             self.logger.error("DEBUG: No bean data found")
             return None

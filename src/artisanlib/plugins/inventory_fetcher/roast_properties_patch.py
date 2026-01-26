@@ -66,7 +66,7 @@ def setup_inventory_integration(roast_properties_dialog, inventory_plugin):
         refresh_button = QPushButton("Refresh", roast_properties_dialog)
         refresh_button.setObjectName("inventory_refresh_button")
         refresh_button.clicked.connect(
-            lambda: refresh_inventory(roast_properties_dialog, inventory_plugin)
+            lambda: refresh_inventory(roast_properties_dialog, inventory_plugin, force_refresh=True)
         )
         _log.info("DEBUG: Refresh button created")
 
@@ -200,47 +200,53 @@ def on_inventory_bean_selected(roast_properties_dialog, inventory_plugin, index)
         _log.error(f"Error handling inventory selection: {e}")
 
 
-def refresh_inventory(roast_properties_dialog, inventory_plugin):
+def refresh_inventory(roast_properties_dialog, inventory_plugin, force_refresh: bool = True):
     """Refresh the inventory data and populate the combo box with thread safety"""
     try:
         QTimer.singleShot(
-            0, lambda: _refresh_inventory_safe(roast_properties_dialog, inventory_plugin)
+            0, lambda: _refresh_inventory_safe(roast_properties_dialog, inventory_plugin, force_refresh)
         )
     except Exception as e:
         _log.error(f"Error scheduling inventory refresh: {e}")
 
 
-def _refresh_inventory_safe(roast_properties_dialog, inventory_plugin):
+def _refresh_inventory_safe(roast_properties_dialog, inventory_plugin, force_refresh: bool = True):
     """Safely refresh inventory in main thread"""
     try:
-        # Check if plugin already has data before fetching
         existing_data = inventory_plugin.get_beans_data()
-        if not existing_data:
-            # Only fetch if no data
+        should_fetch = force_refresh or not existing_data
+        
+        if should_fetch:
+            # Fetch fresh data from server
+            _log.info("Fetching fresh inventory data from server")
             if hasattr(inventory_plugin, "execute_in_worker"):
                 inventory_plugin.execute_in_worker("refresh_inventory", inventory_plugin.fetch_beans)
             else:
                 # Fallback to direct call
                 inventory_plugin.fetch_beans()
         else:
-            # Use existing data
+            # Use existing cached data
             _log.info(f"Using existing inventory data ({len(existing_data)} items)")
 
         # Populate the combo box
         if hasattr(roast_properties_dialog, "inventory_combo"):
-            inventory_plugin.populate_beans_combo(roast_properties_dialog.inventory_combo)
-
-            combo = roast_properties_dialog.inventory_combo
-            items = [combo.itemText(i) for i in range(combo.count())]
-            _log.info(f"Combo box populated with {len(items)} items: {items}")
-        else:
-            _log.error("No inventory_combo found to populate")
+            if not should_fetch:
+                selection_restored = inventory_plugin.populate_beans_combo(roast_properties_dialog.inventory_combo)
+                
+                combo = roast_properties_dialog.inventory_combo
+                items = [combo.itemText(i) for i in range(combo.count())]
+                _log.info(f"Combo box populated with {len(items)} items: {items}")
+                
+                if selection_restored and combo.currentIndex() >= 0:
+                    current_index = combo.currentIndex()
+                    if current_index > 0:
+                        _log.info(f"Triggering selection handler for restored selection at index {current_index}")
+                        _handle_bean_selection_safe(roast_properties_dialog, inventory_plugin, current_index)
 
         _log.info("Inventory refreshed successfully")
 
     except Exception as e:
         _log.error(f"Error refreshing inventory: {e}")
-
 
 def on_inventory_bean_selected(roast_properties_dialog, inventory_plugin, index):
     """Handle inventory bean selection with thread safety"""
@@ -296,7 +302,22 @@ def on_fetch_completed(roast_properties_dialog, beans_data):
     """Handle fetch completion from plugin signals"""
     try:
         _log.info("Fetch completed, updating combo box")
-        on_inventory_updated(roast_properties_dialog, beans_data)
+        if hasattr(roast_properties_dialog, "inventory_combo"):
+            # Populate the combo box with fresh data
+            inventory_plugin = getattr(roast_properties_dialog, "inventory_plugin", None)
+            if inventory_plugin:
+                selection_restored = inventory_plugin.populate_beans_combo(roast_properties_dialog.inventory_combo)
+                combo = roast_properties_dialog.inventory_combo
+                
+                # If a selection was restored, trigger the selection handler
+                if selection_restored and combo.currentIndex() >= 0:
+                    current_index = combo.currentIndex()
+                    if current_index > 0:
+                        _log.info(f"Triggering selection handler for restored selection at index {current_index}")
+                        _handle_bean_selection_safe(roast_properties_dialog, inventory_plugin, current_index)
+        else:
+            # Fallback to old method
+            on_inventory_updated(roast_properties_dialog, beans_data)
     except Exception as e:
         _log.error(f"Error handling fetch completion: {e}")
 

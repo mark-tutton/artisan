@@ -82,9 +82,12 @@ class InventoryFetcher:
             try:
                 self._rate_limit()
 
-                # Build URL
-                # url = self._build_url("/api/inventory")
-                url = self._build_url("/api/inventory/available/artisan")
+                # # Build URL
+                # url = self._build_url("/api/inventory/available/artisan")
+                # params = {"limit": limit, "offset": offset}
+                # Build URL using configurable endpoint
+                inventory_endpoint = self.config.inventory_endpoint or "/api/inventory/available/artisan"
+                url = self._build_url(inventory_endpoint)
                 params = {"limit": limit, "offset": offset}
 
                 _log.info(f"Fetching beans from: {url} (limit: {limit}, offset: {offset})")
