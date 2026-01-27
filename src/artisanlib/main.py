@@ -13244,6 +13244,20 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
                             # establish this digit
                             self.quickEventShortCut = (eventNr,eventValueStr)
                             self.outputQuickEventShortCutState()
+
+                            # AUTO-COMMIT: If custom event button and user has entered 2 digits, trigger immediately
+                            if eventNr == -1 and len(eventValueStr) == 2:
+                                buttonnumber = int(eventValueStr)-1
+                                self.clearMessageLine()
+                                if buttonnumber < len(self.extraeventstypes):
+                                    self.recordextraevent(buttonnumber,parallel=False,updateButtons=False)
+                                else:
+                                    try:
+                                        self.sendmessage(QApplication.translate('Message',f'Button {int(eventValueStr)} not defined'))
+                                    except Exception: # pylint: disable=broad-except
+                                        pass
+                                self.quickEventShortCut = None
+
                 # note Qt/PyQt maps the ';' and ',' keys reversed from the ASCII mapping
                 elif k_txt == ';' and not self.qmc.flagon: #k == Qt.Key.Key_Semicolon: k == 58    # ";" (application screenshots only if not sampling)
                     self.applicationscreenshot()
