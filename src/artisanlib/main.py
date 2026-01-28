@@ -2378,6 +2378,10 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
         self.recentThemeActs = []
         self.applicationDirectory =  QDir().current().absolutePath()
 
+         # Operator prompt settings 
+        self.operator_prompt_interval: int = 5  # Prompt every 5 roasts
+        self.operator_prompt_count: int = 0  # Counter since last prompt
+
         super().__init__(parent) # pyrefly: ignore[bad-argument-count]
         self.helpdialog:Optional[HelpDlg] = None
 
@@ -3270,6 +3274,15 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
             self.switchETBTAction:QAction = QAction(QApplication.translate('Menu', 'Switch ET<->BT'), self)
             self.switchETBTAction.triggered.connect(self.switchETBT)
             self.RoastMenu.addAction(self.switchETBTAction)
+
+# Operator Dialog 
+            self.RoastMenu.addSeparator()
+
+            self.setOperatorAction = QAction(QApplication.translate('Menu', 'Set Operator...'), self)
+            self.setOperatorAction.triggered.connect(self.set_operator_manual)
+            self.RoastMenu.addAction(self.setOperatorAction)
+
+# End Operator Dialog 
 
         # CONFIGURATION menu
         if self.ConfMenu is not None:
@@ -19532,6 +19545,12 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
 
             self.qmc.organization_setup = toString(settings.value('organization_setup',self.qmc.organization_setup))
             self.qmc.operator_setup = toString(settings.value('operator_setup',self.qmc.operator_setup))
+
+# Operator Dialog
+            self.operator_prompt_interval = toInt(settings.value('operator_prompt_interval', 5))
+            self.operator_prompt_count = toInt(settings.value('operator_prompt_count', 0))
+# End Operator Dialog
+
             self.qmc.roastertype_setup = toString(settings.value('roastertype_setup',self.qmc.roastertype_setup))
             self.qmc.roastersize_setup_default = toFloat(settings.value('roastersize_setup_default',self.qmc.roastersize_setup_default))
             self.qmc.roastersize_setup = toFloat(settings.value('roastersize_setup',self.qmc.roastersize_setup))
@@ -21332,6 +21351,10 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
             self.settingsSetValue(settings, default_settings, 'chargemintime',self.qmc.chargemintime, read_defaults)
             self.settingsSetValue(settings, default_settings, 'temp_grid',self.qmc.temp_grid, read_defaults)
             self.settingsSetValue(settings, default_settings, 'time_grid',self.qmc.time_grid, read_defaults)
+# Operator Dialog             
+            self.settingsSetValue(settings, default_settings, 'operator_prompt_interval', self.operator_prompt_interval, read_defaults)
+            self.settingsSetValue(settings, default_settings, 'operator_prompt_count', self.operator_prompt_count, read_defaults)
+# End Operator Dialog 
             settings.endGroup()
 #--- END GROUP Axis
 
@@ -27765,6 +27788,69 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
 #        filename = self.ArtisanOpenFileDialog(msg=QApplication.translate('Message','Load Palettes'),path=self.profilepath)
 #        if filename:
 #            self.getPalettes(filename,pal)
+
+# Operator Dialog 
+    def check_and_prompt_operator(self) -> None:
+        """Check if operator should be prompted and show dialog if needed"""
+        try:
+            # Check if should prompt (every X roasts, or if operator is empty)
+            should_prompt = (
+                self.qmc.operator == '' or 
+                self.operator_prompt_count >= self.operator_prompt_interval
+            )
+            
+            if should_prompt:
+                from artisanlib.dialogs import OperatorDialog
+                
+                dialog = OperatorDialog(self, self, self.qmc.operator)
+                if dialog.exec():
+                    new_operator = dialog.operator
+                    if new_operator:
+                        self.qmc.operator = new_operator
+                        self.qmc.operator_setup = new_operator  
+                        # Save the updated operator_setup
+                        settings = QSettings()
+                        settings.setValue('operator_setup', new_operator)
+                        settings.sync()
+                        self.sendmessage(QApplication.translate('Message', f'Operator set to: {new_operator}'))
+                    else:
+                        # User cleared it, keep current or use setup
+                        if not self.qmc.operator:
+                            self.qmc.operator = self.qmc.operator_setup
+                
+                # Reset counter after prompting
+                self.operator_prompt_count = 0
+                settings = QSettings()
+                settings.setValue('operator_prompt_count', 0)
+                settings.sync()
+            else:
+                # Increment counter
+                self.operator_prompt_count += 1
+                settings = QSettings()
+                settings.setValue('operator_prompt_count', self.operator_prompt_count)
+                settings.sync()
+                
+        except Exception as e: # pylint: disable=broad-except
+            _log.exception(e)
+
+    def set_operator_manual(self, _: bool = False) -> None:
+        """Manually open operator dialog"""
+        from artisanlib.dialogs import OperatorDialog
+        dialog = OperatorDialog(self, self, self.qmc.operator)
+        if dialog.exec():
+            new_operator = dialog.operator
+            if new_operator:
+                self.qmc.operator = new_operator
+                self.qmc.operator_setup = new_operator
+                settings = QSettings()
+                settings.setValue('operator_setup', new_operator)
+                settings.sync()
+                # Reset prompt counter
+                self.operator_prompt_count = 0
+                settings.setValue('operator_prompt_count', 0)
+                settings.sync()
+                self.sendmessage(QApplication.translate('Message', f'Operator set to: {new_operator}'))
+# End Operator Dialog                 
 
     @pyqtSlot(str)
     def loadAlarms(self, filename:str) -> None:

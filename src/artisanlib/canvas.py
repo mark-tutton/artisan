@@ -13951,6 +13951,9 @@ class tgraphcanvas(FigureCanvas):
 
     def OnRecorder(self) -> None:
         try:
+            # Check if should prompt for operator dialog
+            self.aw.check_and_prompt_operator()
+            
             # if on turn mouse crosslines off
             if self.crossmarker:
                 self.togglecrosslines()

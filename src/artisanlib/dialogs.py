@@ -748,3 +748,42 @@ class tareDlg(ArtisanDialog):
             header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
             header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
         self.taretable.setColumnWidth(1,80)
+
+class OperatorDialog(ArtisanDialog):
+    """Dialog to set the operator name"""
+    
+    __slots__ = ['operator_edit', 'operator']
+    
+    def __init__(self, parent: QWidget, aw: 'ApplicationWindow', current_operator: str = '') -> None:
+        super().__init__(parent, aw)
+        
+        self.operator = current_operator
+        self.setWindowTitle(QApplication.translate('Form Caption', 'Set Operator'))
+        self.setModal(True)
+        
+        layout = QVBoxLayout()
+        
+        label = QLabel(QApplication.translate('Label', 'Operator:'))
+        self.operator_edit = QLineEdit(current_operator)
+        self.operator_edit.setPlaceholderText(QApplication.translate('Placeholder', 'Enter operator name'))
+        self.operator_edit.selectAll()
+        self.operator_edit.setFocus()
+        
+        layout.addWidget(label)
+        layout.addWidget(self.operator_edit)
+        layout.addWidget(self.dialogbuttons)
+        
+        self.setLayout(layout)
+        self.setFixedHeight(self.sizeHint().height())
+        
+        # Connect buttons
+        self.dialogbuttons.accepted.connect(self.accept)
+        self.dialogbuttons.rejected.connect(self.reject)
+        
+        # Enter key submits
+        self.operator_edit.returnPressed.connect(self.accept)
+    
+    @pyqtSlot()
+    def accept(self) -> None:
+        self.operator = self.operator_edit.text().strip()
+        super().accept()
