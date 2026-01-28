@@ -27850,7 +27850,7 @@ class ApplicationWindow(QMainWindow):  # pyright: ignore [reportGeneralTypeIssue
                 settings.setValue('operator_prompt_count', 0)
                 settings.sync()
                 self.sendmessage(QApplication.translate('Message', f'Operator set to: {new_operator}'))
-# End Operator Dialog                 
+# End   Operator Dialog                 
 
     @pyqtSlot(str)
     def loadAlarms(self, filename:str) -> None:
